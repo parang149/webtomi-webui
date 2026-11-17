@@ -185,7 +185,7 @@ onMounted(() => run(load))
         <option value="desktop">데스크톱 앱과 동일</option>
         <option value="safe">안전 (느림)</option>
       </CompareSelect></label>
-      <p class="auth-help">{{ policyHelp[settings.preferences.network.image_policy] }} 거부가 반복되면 모든 이미지 요청을 3~5분 쉬었다가 자동으로 이어받습니다.</p>
+      <p class="auth-help">{{ policyHelp[settings.preferences.network.image_policy] }} 거부가 반복되면 다운로드 이미지 요청을 40초~1분30초 쉬었다가 자동으로 이어받습니다. 표지와 바로 읽기는 쉬지 않습니다.</p>
     </template>
     <template v-else-if="section === 'download'">
       <label>이미지 형식<CompareSelect v-model="settings.preferences.image_format"><option value="webp">WebP</option><option value="avif">AVIF</option></CompareSelect></label>

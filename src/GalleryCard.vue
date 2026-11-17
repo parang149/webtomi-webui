@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Shared result card for Hitomi search, E-Hentai search and the library.
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import CopyValue from './CopyValue.vue'
 import { kindColor } from './type-colors'
 import { tagClass, tagDescription, tagKey } from './tag-descriptions'
@@ -9,7 +9,22 @@ const props = defineProps<{ layout: 'grid' | 'list'; title: string; cover?: stri
 const emit = defineEmits<{ detail: []; coverError: [string] }>()
 const TAG_PREVIEW = 4
 const expanded = ref(false), coverFailed = ref(false)
-watch(() => props.cover, () => { coverFailed.value = false })
+// Our own cover endpoint can fail briefly; retry it twice before showing the placeholder.
+const coverRetry = ref(0)
+let retryTimer: ReturnType<typeof setTimeout> | undefined
+watch(() => props.cover, () => { coverFailed.value = false; coverRetry.value = 0; clearTimeout(retryTimer) })
+onBeforeUnmount(() => clearTimeout(retryTimer))
+const coverSrc = computed(() => !props.cover || !coverRetry.value ? props.cover : `${props.cover}${props.cover.includes('?') ? '&' : '?'}retry=${coverRetry.value}`)
+function coverLoadFailed() {
+  const cover = props.cover
+  if (!cover) return
+  if (cover.startsWith('/') && coverRetry.value < 2) {
+    const wait = coverRetry.value ? 5000 : 2000
+    retryTimer = setTimeout(() => { if (props.cover === cover) coverRetry.value++ }, wait)
+    return
+  }
+  coverFailed.value = true; emit('coverError', cover)
+}
 const shownTags = computed(() => expanded.value ? props.tags ?? [] : (props.tags ?? []).slice(0, TAG_PREVIEW))
 const listUi = { body: 'grid grid-cols-[90px_minmax(0,1fr)] sm:grid-cols-[140px_minmax(0,1fr)] items-start gap-x-3 sm:gap-x-[18px] gap-y-2 p-2.5 sm:p-4' }
 const gridUi = { root: 'flex flex-col', body: 'flex-1 flex flex-col p-2.5 sm:p-4' }
@@ -18,7 +33,7 @@ const gridUi = { root: 'flex flex-col', body: 'flex-1 flex flex-col p-2.5 sm:p-4
 <template>
   <UCard :ui="layout === 'list' ? listUi : gridUi">
     <UButton variant="ghost" color="neutral" class="cover-link" :aria-label="`${title} 상세 보기`" @click="emit('detail')">
-      <img v-if="cover && !coverFailed" :src="cover" alt="" loading="lazy" referrerpolicy="no-referrer" @error="coverFailed = true; emit('coverError', cover)">
+      <img v-if="cover && !coverFailed" :src="coverSrc" alt="" loading="lazy" referrerpolicy="no-referrer" @error="coverLoadFailed">
       <span v-else :class="{ 'format-placeholder': placeholder }">{{ placeholder || '표지 없음' }}</span>
       <span v-if="downloaded" class="download-check" title="다운로드 완료" aria-label="다운로드 완료" role="img">✓</span>
     </UButton>
