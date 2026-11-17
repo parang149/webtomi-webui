@@ -7,6 +7,7 @@ const emit = defineEmits<{ close: []; detail: [] }>()
 const page = ref(0)
 const mode = ref<'page' | 'scroll'>('page')
 const direction = ref<'ltr' | 'rtl' | 'ttb'>('ltr')
+const swipe = ref(true)
 const forward = computed(() => direction.value === 'rtl' ? -1 : 1)
 const zoom = ref(100)
 const fit = ref<'width' | 'screen' | 'original'>('screen')
@@ -182,7 +183,7 @@ function keydown(event: KeyboardEvent) {
   if (event.key === 'Home') page.value = 0
   if (event.key === 'End') page.value = props.book.pages - 1
 }
-let touch: { x: number; y: number; top: boolean; bottom: boolean; edge: boolean } | null = null
+let touch: { x: number; y: number; top: boolean; bottom: boolean; left: boolean; right: boolean; edge: boolean } | null = null
 const EDGE = 24
 function touchstart(event: TouchEvent) {
   if (event.touches.length !== 1) suppressClickUntil = Date.now() + 700
@@ -191,8 +192,12 @@ function touchstart(event: TouchEvent) {
   // Touches from the screen edge would start the browser's back gesture; keep them in the viewer.
   const edge = event.touches.length === 1 && (x <= EDGE || x >= window.innerWidth - EDGE)
   if (edge && event.cancelable) event.preventDefault()
-  // Tall pages scroll first; a vertical swipe turns only when it starts at the edge.
-  touch = event.touches.length === 1 ? { x, y: event.touches[0].clientY, top: !view || view.scrollTop <= 2, bottom: !view || view.scrollTop + view.clientHeight >= view.scrollHeight - 2, edge } : null
+  // Large pages scroll first; a swipe turns only when it starts at that scroll edge.
+  touch = event.touches.length === 1 ? {
+    x, y: event.touches[0].clientY, edge,
+    top: !view || view.scrollTop <= 2, bottom: !view || view.scrollTop + view.clientHeight >= view.scrollHeight - 2,
+    left: !view || view.scrollLeft <= 2, right: !view || view.scrollLeft + view.clientWidth >= view.scrollWidth - 2,
+  } : null
 }
 function touchend(event: TouchEvent) {
   const start = touch; touch = null
@@ -200,9 +205,10 @@ function touchend(event: TouchEvent) {
   const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y
   // Cancelled edge touches produce no click, so their taps are handled here.
   if (start.edge && Math.hypot(dx, dy) <= 12) { surfaceClick({ clientX: start.x + dx, clientY: start.y + dy } as MouseEvent); return }
-  if (settings.value || mode.value !== 'page' || zoom.value !== 100 || imageWidth.value > frame.value.width + 1) return
-  if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.6) { move((dx < 0 ? 1 : -1) * forward.value); suppressClickUntil = Date.now() + 500 }
-  else if (direction.value === 'ttb' && Math.abs(dy) > 70 && Math.abs(dy) > Math.abs(dx) * 1.6 && (dy < 0 ? start.bottom : start.top)) { move(dy < 0 ? 1 : -1); suppressClickUntil = Date.now() + 500 }
+  if (!swipe.value || settings.value || mode.value !== 'page') return
+  // Left/right follows the reading direction (vertical reading turns like right-hand); up always means next.
+  if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.6 && (dx < 0 ? start.right : start.left)) { move((dx < 0 ? 1 : -1) * forward.value); suppressClickUntil = Date.now() + 500 }
+  else if (Math.abs(dy) > 70 && Math.abs(dy) > Math.abs(dx) * 1.6 && (dy < 0 ? start.bottom : start.top)) { move(dy < 0 ? 1 : -1); suppressClickUntil = Date.now() + 500 }
   touch = null
 }
 function visible(index: number) { if (ready.value && !positioning && mode.value === 'scroll') page.value = index }
@@ -262,6 +268,7 @@ onMounted(async () => {
     const saved = JSON.parse(localStorage.getItem('reader:appearance') || '{}')
     if (['width','screen','original'].includes(saved.fit)) fit.value = saved.fit
     if (saved.direction === 'rtl' || saved.direction === 'ttb') direction.value = saved.direction
+    if (saved.swipe === false) swipe.value = false
   } catch { /* Optional preference. */ }
   let fallback = { page: 0, mode: 'page' }
   try {
@@ -288,7 +295,7 @@ onMounted(async () => {
   hideTimer = setTimeout(() => { if (!settings.value && !reader.value?.contains(document.activeElement)) controls.value = false }, 3500)
   window.addEventListener('keydown', keydown); window.addEventListener('pagehide', flush); document.addEventListener('visibilitychange', visibility)
 })
-watch([fit, direction], () => { try { localStorage.setItem('reader:appearance', JSON.stringify({ fit: fit.value, direction: direction.value })) } catch { /* Optional preference. */ } })
+watch([fit, direction, swipe], () => { try { localStorage.setItem('reader:appearance', JSON.stringify({ fit: fit.value, direction: direction.value, swipe: swipe.value })) } catch { /* Optional preference. */ } })
 onBeforeUnmount(flush)
 onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.disconnect(); clearTimeout(hideTimer); disposed = true; window.removeEventListener('keydown', keydown); window.removeEventListener('pagehide', flush); document.removeEventListener('visibilitychange', visibility) })
 
@@ -315,6 +322,7 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
       <fieldset><legend>이미지 맞춤</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '화면 맞춤', value: 'screen' }, { label: '폭 맞춤', value: 'width' }, { label: '원본 크기', value: 'original' }]" :model-value="fit" @update:model-value="value => setFit(value as 'width' | 'screen' | 'original')" /></fieldset>
       <fieldset><legend>읽기 방식</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '페이지 넘김', value: 'page' }, { label: '세로 스크롤', value: 'scroll' }]" :model-value="mode" @update:model-value="value => mode = value as 'page' | 'scroll'" /></fieldset>
       <fieldset><legend>읽기 방향</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '오른쪽', icon: 'i-lucide-arrow-right', value: 'ltr' }, { label: '왼쪽', icon: 'i-lucide-arrow-left', value: 'rtl' }, { label: '세로', icon: 'i-lucide-arrow-down', value: 'ttb' }]" :model-value="direction" @update:model-value="value => direction = value as 'ltr' | 'rtl' | 'ttb'" /></fieldset>
+      <div class="zoom-row"><span>스와이프로 넘기기</span><USwitch v-model="swipe" aria-label="스와이프로 페이지 넘기기" /></div>
       <div class="zoom-row"><span>확대 (%)</span><UInputNumber v-model="zoom" variant="soft" :min="50" :max="300" :step="25" size="sm" class="w-32" aria-label="확대 비율" /></div>
       <div class="read-actions"><UButton variant="ghost" color="neutral" size="sm" block v-if="!ehentaiToken" @click="setRead(true)">읽음으로 표시</UButton><UButton variant="ghost" color="neutral" size="sm" block @click="setRead(false)">안 읽음으로 변경</UButton></div><p class="sync-status" role="status">{{ status }}</p><p class="keyboard-hint">← → 페이지 이동 · Space 메뉴</p>
     </aside></Transition>
