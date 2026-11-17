@@ -103,6 +103,27 @@ function restoreScreen() {
   screen.value = entry
   restoreScroll(positions.get(entry.key) ?? 0)
 }
+const lastReaderKey = 'app:last-reader'
+function savedReader(): { tab: Screen['tab']; reader: Book } | null {
+  try {
+    const saved = JSON.parse(localStorage.getItem(lastReaderKey) || 'null')
+    return saved?.reader?.id && menu.some(item => item.id === saved.tab) ? saved : null
+  } catch { return null }
+}
+function readerHash(book: Book) {
+  const kind = book.ehentaiToken ? 'ehentai' : book.remote ? 'hitomi' : 'library'
+  return `#read/${kind}/${encodeURIComponent(book.id)}`
+}
+function rememberReader(current: Screen) {
+  if (location.hash === '#settings') return
+  const book = current.reader
+  try {
+    if (book) localStorage.setItem(lastReaderKey, JSON.stringify({ tab: current.tab, reader: book }))
+    else localStorage.removeItem(lastReaderKey)
+  } catch { /* Optional: restore still works from the address while the tab lives. */ }
+  const hash = book ? readerHash(book) : ''
+  if (location.hash !== hash) history.replaceState(history.state, '', location.pathname + location.search + hash)
+}
 function searchText(book:Book) {
   const m=book.metadata
   return [book.id,book.title,m?.id,m?.type,m?.language,...(m?.artists||[]),...(m?.groups||[]),...(m?.parodys||[]),...(m?.characters||[]),...(m?.tags||[]).flatMap(t=>[t.tag,t.female ? `female:${t.tag}` : '',t.male ? `male:${t.tag}` : ''])].join('\n').toLowerCase()
@@ -255,7 +276,19 @@ onMounted(() => {
   previousRestoration = history.scrollRestoration
   history.scrollRestoration = 'manual'
   if (history.state?.hitomiScreen) screen.value = history.state.hitomiScreen
-  else if (location.hash !== '#settings') history.replaceState({ ...history.state, hitomiScreen: screen.value }, '')
+  else if (location.hash !== '#settings') {
+    // A fresh start (browser closed, tab evicted, home-screen icon) reopens the last viewer.
+    const last = savedReader()
+    const base: Screen = { key: newKey(), tab: last?.tab ?? 'search' }
+    history.replaceState({ ...history.state, hitomiScreen: base }, '', location.pathname + location.search)
+    screen.value = base
+    if (last) {
+      const entry: Screen = { key: newKey(), tab: last.tab, reader: last.reader }
+      history.pushState({ hitomiScreen: JSON.parse(JSON.stringify(entry)) }, '')
+      screen.value = entry
+    }
+  }
+  watch(screen, rememberReader, { immediate: true })
   window.addEventListener('popstate', restoreScreen)
   void refresh()
   void loadInfoCacheMode()
