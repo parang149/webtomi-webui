@@ -1,0 +1,7 @@
+.job-filters { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; }
+.job-filters label { width: min(14rem, 100%); }
+.job-filters select { width: 100%; }
+
+@media (max-width: 600px) {
+  .job-filters > label { width: auto; min-width: 0; flex: 1 1 calc(50% - .75rem); }
+}

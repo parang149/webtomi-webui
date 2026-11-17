@@ -1,0 +1,43 @@
+name: WEBUI release
+# Builds the WEBUI and publishes webui-v<version>.zip (+ .sha256) as a GitHub release.
+# Runs on every push to main; a version that already has a release is skipped.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm test && npm run build
+      - name: Read version
+        id: v
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Check existing release
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.v.outputs.version }}" >/dev/null 2>&1; then echo "skip=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Publish release
+        if: steps.exists.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          test "$(node -p "require('./dist/webui.json').version")" = "$VERSION"
+          name="webui-v${VERSION}.zip"
+          (cd dist && zip -qr "../$name" .)
+          sha256sum "$name" | cut -d' ' -f1 > "$name.sha256"
+          flags=""
+          case "$VERSION" in *-*) flags="--prerelease" ;; esac
+          git log -1 --pretty=%B > notes.txt
+          gh release create "v$VERSION" "$name" "$name.sha256" --title "WEBUI v$VERSION" --notes-file notes.txt $flags
