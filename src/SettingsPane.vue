@@ -3,6 +3,7 @@ import CompareSelect from "./OptionSelect"
 import { trackLibraryTask } from './organize-job'
 import { computed, onMounted, ref } from 'vue'
 import MaintenancePane from './MaintenancePane.vue'
+import ToonOrigins from './ToonOrigins.vue'
 
 const props = defineProps<{ section: 'download' | 'library' | 'cache' | 'network' }>()
 const emit = defineEmits<{ libraryChanged: []; organize: [string, boolean, number] }>()
@@ -48,6 +49,8 @@ type CacheSettings = { prefetch: boolean; prefetch_pages: number; retention_hour
 type Preferences = CacheSettings & { cover_cache_mb: number;
   library_path: string
   ehentai_path: string
+  toon_path: string
+  wolf_path: string
   cache_path: string
   name_template: string
   ehentai_name_template: string
@@ -56,19 +59,22 @@ type Preferences = CacheSettings & { cover_cache_mb: number;
   archive: boolean
   image_format: 'webp' | 'avif'
   ehentai_cache: CacheSettings
+  comics_cache: CacheSettings
 }
-type Settings = { preferences: Preferences; library_root: string; default_hitomi_library: string; data_root: string; active_library: string; active_ehentai_library: string; active_cache_parent: string; library_path_error: string | null; ehentai_path_error: string | null; cache_bytes: number; ehentai_cache_bytes: number; cover_cache_bytes: number }
+type Settings = { preferences: Preferences; library_root: string; default_hitomi_library: string; data_root: string; active_library: string; active_ehentai_library: string; active_toon_library: string; active_wolf_library: string; active_cache_parent: string; library_path_error: string | null; ehentai_path_error: string | null; cache_bytes: number; ehentai_cache_bytes: number; comics_cache_bytes: number; cover_cache_bytes: number }
 type Folders = { path: string; parent: string | null; absolute: string; children: string[] }
 const folderTargets = [
   { key: 'library_path', label: 'Hitomi 다운로드', active: 'active_library', error: 'library_path_error' },
   { key: 'ehentai_path', label: 'E-Hentai 다운로드', active: 'active_ehentai_library', error: 'ehentai_path_error' },
+  { key: 'toon_path', label: '일일툰 다운로드', active: 'active_toon_library', error: null },
+  { key: 'wolf_path', label: '늑대툰 다운로드', active: 'active_wolf_library', error: null },
   { key: 'cache_path', label: '캐시', active: 'active_cache_parent', error: null },
 ] as const
 type FolderTarget = typeof folderTargets[number]['key']
 const settings = ref<Settings>()
-const cacheSource = ref<'hitomi' | 'ehentai'>('hitomi')
-const cacheConfig = computed(() => cacheSource.value === 'ehentai' ? settings.value?.preferences.ehentai_cache : settings.value?.preferences)
-const usageField = computed(() => cacheSource.value === 'ehentai' ? 'ehentai_cache_bytes' : 'cache_bytes')
+const cacheSource = ref<'hitomi' | 'ehentai' | 'comics'>('hitomi')
+const cacheConfig = computed(() => cacheSource.value === 'ehentai' ? settings.value?.preferences.ehentai_cache : cacheSource.value === 'comics' ? settings.value?.preferences.comics_cache : settings.value?.preferences)
+const usageField = computed(() => cacheSource.value === 'ehentai' ? 'ehentai_cache_bytes' : cacheSource.value === 'comics' ? 'comics_cache_bytes' : 'cache_bytes')
 const folders = ref<Folders>()
 const folderTarget = ref<FolderTarget>()
 function selectedFolder({ preferences, library_root, default_hitomi_library, data_root }: Settings, target: FolderTarget) {
@@ -76,6 +82,11 @@ function selectedFolder({ preferences, library_root, default_hitomi_library, dat
   switch (target) {
     case 'library_path': return hitomiPath
     case 'cache_path': return preferences.cache_path || data_root
+    case 'toon_path': case 'wolf_path': {
+      const separator = library_root.includes('\\') ? '\\' : '/'
+      const base = library_root + (library_root.endsWith(separator) ? '' : separator) + 'toon' + separator
+      return preferences[target] || base + (target === 'toon_path' ? '11toon' : 'wolftoon')
+    }
     case 'ehentai_path': {
       const separator = library_root.includes('\\') ? '\\' : '/'
       const joinEhentai = (path: string) => path + (path.endsWith(separator) ? '' : separator) + 'E-Hentai'
@@ -125,7 +136,7 @@ function save() {
 }
 function clearCache() {
   void run(async () => {
-    const response = await fetch(cacheSource.value === 'ehentai' ? '/api/settings/cache/ehentai' : '/api/settings/cache', { method: 'DELETE' })
+    const response = await fetch(cacheSource.value === 'hitomi' ? '/api/settings/cache' : `/api/settings/cache/${cacheSource.value}`, { method: 'DELETE' })
     if (!response.ok) throw new Error('캐시를 비우지 못했습니다.')
     if (settings.value) settings.value[usageField.value] = 0
     message.value = '캐시를 비웠습니다.'
@@ -186,6 +197,8 @@ onMounted(() => run(load))
         <option value="safe">안전 (느림)</option>
       </CompareSelect></label>
       <p class="auth-help">{{ policyHelp[settings.preferences.network.image_policy] }} 거부가 반복되면 다운로드 이미지 요청을 40초~1분30초 쉬었다가 자동으로 이어받습니다. 표지와 바로 읽기는 쉬지 않습니다.</p>
+      <ToonOrigins site="toon" label="일일툰" example="103.204.13.68:8904" />
+      <ToonOrigins site="wolf" label="늑대툰" example="wfwf540.com" />
     </template>
     <template v-else-if="section === 'download'">
       <label>이미지 형식<CompareSelect v-model="settings.preferences.image_format"><option value="webp">WebP</option><option value="avif">AVIF</option></CompareSelect></label>
@@ -235,6 +248,7 @@ onMounted(() => run(load))
       <div class="cache-sources" role="group" aria-label="온라인 읽기 캐시 출처">
         <UButton :variant="(cacheSource === 'hitomi') ? 'solid' : 'outline'" :color="(cacheSource === 'hitomi') ? 'primary' : 'neutral'" type="button" :aria-pressed="cacheSource === 'hitomi'" :disabled="busy" @click="cacheSource = 'hitomi'">Hitomi</UButton>
         <UButton :variant="(cacheSource === 'ehentai') ? 'solid' : 'outline'" :color="(cacheSource === 'ehentai') ? 'primary' : 'neutral'" type="button" :aria-pressed="cacheSource === 'ehentai'" :disabled="busy" @click="cacheSource = 'ehentai'">E-Hentai</UButton>
+        <UButton :variant="(cacheSource === 'comics') ? 'solid' : 'outline'" :color="(cacheSource === 'comics') ? 'primary' : 'neutral'" type="button" :aria-pressed="cacheSource === 'comics'" :disabled="busy" @click="cacheSource = 'comics'">만화</UButton>
       </div>
       <label class="checkbox"><USwitch v-model="cacheConfig.prefetch" />다음 페이지 미리 캐싱</label>
       <label>캐싱 범위<CompareSelect v-model="cacheConfig.prefetch_pages" :disabled="!cacheConfig.prefetch"><option v-for="pages in [1, 3, 5, 10]" :key="pages" :value="pages">다음 {{ pages }}페이지</option></CompareSelect></label>

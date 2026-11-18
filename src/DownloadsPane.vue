@@ -7,7 +7,7 @@ import SourceTabs from './SourceTabs.vue'
 
 const props = defineProps<{ localCovers: ReadonlyMap<string, string> }>()
 const emit = defineEmits<{ libraryChanged: [] }>()
-type Job = { id: number; source?: 'hitomi' | 'ehentai'; token?: string; title: string; status: string; downloaded: number; total: number; error: string | null; artists?: string[]; thumb?: string | null; started_at?: number | null; completed_at?: number | null; retry_at?: number | null }
+type Job = { id: number; source?: 'hitomi' | 'ehentai' | 'toon' | 'wolf'; token?: string; toon_series?: number; series_title?: string; title: string; status: string; downloaded: number; total: number; error: string | null; artists?: string[]; thumb?: string | null; started_at?: number | null; completed_at?: number | null; retry_at?: number | null }
 const detailed = ref(false)
 const expanded = ref(new Set<string>())
 const brokenCovers = ref(new Set<string>())
@@ -17,8 +17,8 @@ const pending = ref(false)
 const hasFinishedJobs = computed(() => jobs.value.some(job => job.status === 'completed' || job.status === 'cancelled'))
 const filter = ref('all')
 const sortDirection = ref<'asc' | 'desc'>('asc')
-const source = ref<'all' | 'hitomi' | 'ehentai'>('all')
-const sourceJobs = computed(() => jobs.value.filter(job => source.value === 'all' || source.value === (job.source ?? 'hitomi')))
+const source = ref<'all' | 'hitomi' | 'ehentai' | 'toon'>('all')
+const sourceJobs = computed(() => jobs.value.filter(job => source.value === 'all' || source.value === (job.source === 'wolf' ? 'toon' : job.source ?? 'hitomi')))
 function waitLabel(job: Job) {
   if (job.status !== 'downloading' || !job.retry_at) return ''
   const seconds = Math.max(0, job.retry_at - Date.now() / 1000)
@@ -77,7 +77,7 @@ async function animateCard(job: Job, event: MouseEvent) {
   header.animate([{ transform: `translate(${before.left - after.left}px, ${before.top - after.top}px)` },
     { transform: 'translate(0, 0)' }], { duration: 220, easing: 'ease-out' })
 }
-const cover = (job: Job) => job.status === 'completed' ? props.localCovers.get(jobKey(job)) : job.source === 'ehentai' ? ehentaiCover(job.thumb) : `/api/galleries/${job.id}/cover`
+const cover = (job: Job) => job.status === 'completed' ? props.localCovers.get(jobKey(job)) : job.source === 'toon' || job.source === 'wolf' ? job.thumb ?? undefined : job.source === 'ehentai' ? ehentaiCover(job.thumb) : `/api/galleries/${job.id}/cover`
 const dateFormat = new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'medium' })
 const formatTime = (seconds?: number | null) => seconds == null ? '—' : dateFormat.format(seconds * 1000)
 function duration(job: Job) {
@@ -91,16 +91,44 @@ async function action(job: Job, command = '') {
   revision++
   pending.value = true
   try {
-    const source = job.source === 'ehentai' ? '/api/ehentai' : '/api'
+    const source = job.source === 'ehentai' ? '/api/ehentai' : job.source === 'toon' || job.source === 'wolf' ? `/api/${job.source}` : '/api'
     const body = job.source === 'ehentai' && !command
       ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: job.token, title: job.title }) }
       : {}
-    const response = await fetch(`${source}/downloads/${job.id}${command ? '/' + command : ''}`, { method: 'POST', ...body })
+    // A 일일툰 resume re-adds the episode through the batch endpoint.
+    const response = (job.source === 'toon' || job.source === 'wolf') && !command
+      ? await fetch(`/api/${job.source}/downloads`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ series: job.toon_series, series_title: job.series_title ?? '', episodes: [{ id: job.id, title: job.title }] }) })
+      : await fetch(`${source}/downloads/${job.id}${command ? '/' + command : ''}`, { method: 'POST', ...body })
     if (!response.ok) throw new Error()
-    const updated: Job = await response.json()
+    const result: Job | Job[] = await response.json()
+    const updated = Array.isArray(result) ? result[0] : result
+    if (!updated) throw new Error()
     jobs.value = jobs.value.map(old => jobKey(old) === jobKey(updated) ? updated : old)
   } catch { error.value = '상태가 바뀌었거나 요청을 처리하지 못했습니다. 현재 상태를 확인하세요.' }
   finally { pending.value = false }
+}
+const controlPath = (job: Job) => job.source === 'ehentai' ? '/api/ehentai' : job.source === 'toon' || job.source === 'wolf' ? `/api/${job.source}` : '/api'
+const pausable = computed(() => sourceJobs.value.filter(job => ['queued', 'downloading'].includes(job.status)))
+const cancellable = computed(() => sourceJobs.value.filter(job => ['queued', 'downloading', 'paused', 'interrupted', 'failed'].includes(job.status)))
+const confirmCancel = ref(false)
+// Pause or cancel every matching job in the current source tab, one request per job.
+async function controlAll(command: 'pause' | 'cancel') {
+  const targets = command === 'pause' ? pausable.value : cancellable.value
+  confirmCancel.value = false
+  if (!targets.length) return
+  revision++
+  pending.value = true
+  let failed = 0
+  for (const job of targets) {
+    try {
+      const response = await fetch(`${controlPath(job)}/downloads/${job.id}/${command}`, { method: 'POST' })
+      if (!response.ok) throw new Error()
+      const updated: Job = await response.json()
+      jobs.value = jobs.value.map(old => jobKey(old) === jobKey(updated) ? updated : old)
+    } catch { failed++ }
+  }
+  pending.value = false
+  if (failed) error.value = `작업 ${failed}개는 상태가 바뀌었거나 처리하지 못했습니다.`
 }
 async function clearFinished() {
   revision++
@@ -123,6 +151,14 @@ onUnmounted(() => { disposed = true; clearTimeout(timer) })
       <label>작업 필터<AppSelect v-model="filter" label="작업 필터" :options="[{'value': 'all', 'label': `전체 (${sourceJobs.length})`}, {'value': 'active', 'label': '진행 중'}, {'value': 'stopped', 'label': '일시정지·중단·실패'}, {'value': 'completed', 'label': '완료'}]" /></label>
       <label>정렬 방향<AppSelect v-model="sortDirection" label="정렬 방향" :options="[{'value': 'asc', 'label': '오름차순'}, {'value': 'desc', 'label': '내림차순'}]" /></label>
       <UButton variant="outline" color="neutral" type="button" :disabled="pending || !hasFinishedJobs" @click="clearFinished">완료·취소 작업 제거</UButton>
+      <UButton variant="outline" color="neutral" type="button" icon="i-lucide-pause" :disabled="pending || !pausable.length" @click="controlAll('pause')">모두 일시정지</UButton>
+      <UButton variant="outline" color="error" type="button" icon="i-lucide-x" :disabled="pending || !cancellable.length" @click="confirmCancel = true">모두 취소</UButton>
+      <UModal v-model:open="confirmCancel" title="모든 다운로드 취소" :description="`작업 ${cancellable.length}개를 취소하고 받은 임시 파일을 삭제합니다. 되돌릴 수 없습니다.`">
+        <template #footer>
+          <UButton variant="outline" color="neutral" @click="confirmCancel = false">돌아가기</UButton>
+          <UButton color="error" :loading="pending" @click="controlAll('cancel')">모두 취소</UButton>
+        </template>
+      </UModal>
       <div class="download-views" role="group" aria-label="다운로드 보기 방식">
         <UButton :variant="(!detailed) ? 'solid' : 'outline'" :color="(!detailed) ? 'primary' : 'neutral'" type="button" :aria-pressed="!detailed" aria-label="기본 보기" title="기본 보기" @click="detailed = false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -147,7 +183,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer) })
         <CollapsibleContent class="job-detail">
             <div class="job-info">
               <p>작가 {{ job.artists?.join(', ') || '정보 없음' }}</p>
-              <p class="job-source">{{ job.source === 'ehentai' ? 'E-Hentai' : 'Hitomi' }}</p>
+              <p class="job-source">{{ job.source === 'toon' || job.source === 'wolf' ? `${job.source === 'wolf' ? '늑대툰' : '일일툰'} · ${job.series_title ?? ''}` : job.source === 'ehentai' ? 'E-Hentai' : 'Hitomi' }}</p>
               <dl class="job-times">
                 <div><dt>시작 시각</dt><dd>{{ formatTime(job.started_at) }}</dd></div>
                 <div><dt>완료 시각</dt><dd>{{ formatTime(job.completed_at) }}</dd></div>

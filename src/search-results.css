@@ -1,4 +1,4 @@
-.results{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.results{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
 .results>*{overflow-wrap:anywhere}
 .results h3{margin:0 0 4px}
 .results p{font-size:14px;color:var(--muted)}

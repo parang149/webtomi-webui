@@ -2,8 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import ScrollPage from './ScrollPage.vue'
 import { refreshReading, markReading, pendingProgress, resetReading, type EhentaiDetails } from './reading-history'
-const props = defineProps<{ book: { id: string; title: string; pages: number; remote?: boolean; ehentaiToken?: string; ehentaiDetails?: EhentaiDetails }; detailError?: string; backPrompt?: number }>()
-const emit = defineEmits<{ close: []; detail: [] }>()
+const props = defineProps<{ book: { id: string; title: string; pages: number; remote?: boolean; ehentaiToken?: string; ehentaiDetails?: EhentaiDetails; toon?: { site?: 'toon' | 'wolf'; series: number; seriesTitle: string; episodes: { id: number; title: string }[]; local?: boolean }; metadata?: { toon_episode?: number } }; detailError?: string; backPrompt?: number }>()
+const emit = defineEmits<{ close: []; detail: []; episode: [number] }>()
 const page = ref(0)
 const mode = ref<'page' | 'scroll'>('page')
 const direction = ref<'ltr' | 'rtl' | 'ttb'>('ltr')
@@ -99,12 +99,21 @@ onBeforeUnmount(() => clearTimeout(loadingTimer))
 const viewport = ref<HTMLElement>()
 const encodedId = encodeURIComponent(props.book.id)
 const ehentaiToken = props.book.ehentaiToken
-const baseUrl = ehentaiToken
+const toon = props.book.toon
+// Downloaded episodes read from the library but keep the episode navigation.
+const toonOnline = toon && !toon.local ? toon : undefined
+const comicSite = toon?.site ?? 'toon'
+const online = !!(props.book.remote || ehentaiToken || toonOnline)
+const baseUrl = toonOnline ? `/api/${comicSite}/episodes/${encodedId}` : ehentaiToken
   ? `/api/ehentai/galleries/${encodedId}/${encodeURIComponent(ehentaiToken)}`
   : `/api/${props.book.remote ? 'galleries' : 'library'}/${encodedId}`
-const progressUrl = `${baseUrl}/progress`
+const progressUrl = toonOnline ? `/api/${comicSite}/series/${toonOnline.series}/episodes/${encodedId}/progress` : `${baseUrl}/progress`
+const toonEpisode = toon?.local ? props.book.metadata?.toon_episode : Number(props.book.id)
+const toonIndex = toon ? toon.episodes.findIndex(item => item.id === toonEpisode) : -1
+const nextEpisode = toon && toonIndex >= 0 ? toon.episodes[toonIndex + 1] : undefined
+const previousEpisode = toon && toonIndex > 0 ? toon.episodes[toonIndex - 1] : undefined
 const imageUrl = (index: number) => `${baseUrl}/pages/${index}`
-const storageKey = ehentaiToken
+const storageKey = toonOnline ? `reader:${comicSite}:${props.book.id}` : ehentaiToken
   ? `reader:ehentai:${props.book.id}:${ehentaiToken}`
   : `reader:${props.book.remote ? 'remote:' : ''}${props.book.id}`
 const reader = ref<HTMLElement>()
@@ -121,8 +130,8 @@ function save() {
   const position = `${data.page}:${data.mode}`
   if (savedPosition === position) return
   savedPosition = position
-  try { localStorage.setItem(storageKey, ehentaiToken ? JSON.stringify(data) : String(data.page)) } catch { /* Optional fallback. */ }
-  const body = ehentaiToken
+  try { localStorage.setItem(storageKey, ehentaiToken || toonOnline ? JSON.stringify(data) : String(data.page)) } catch { /* Optional fallback. */ }
+  const body = toonOnline ? { ...data, title: props.book.title } : ehentaiToken
     ? { ...data, title: props.book.title, details: props.book.ehentaiDetails }
     : data
   chain = chain.then(async () => {
@@ -218,7 +227,12 @@ async function setRead(completed: boolean) {
   try {
     clearTimeout(timer)
     await chain
-    if (ehentaiToken) await resetReading(`ehentai:${props.book.id}:${ehentaiToken}`)
+    if (toonOnline && completed) {
+      const response = await fetch(progressUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page: props.book.pages - 1, mode: mode.value, title: props.book.title }) })
+      if (!response.ok) throw new Error()
+      await refreshReading()
+    } else if (toonOnline) await resetReading(`${comicSite}:${toonOnline.series}:${props.book.id}`)
+    else if (ehentaiToken) await resetReading(`ehentai:${props.book.id}:${ehentaiToken}`)
     else await markReading(props.book.id, completed, !!props.book.remote)
     status.value = completed ? '읽음으로 표시했습니다' : '안 읽음으로 변경했습니다'
     if (!completed) emit('close')
@@ -242,10 +256,10 @@ watch([fit, zoom], async () => {
 })
 watch(page, () => {
   if (mode.value === 'page' && viewport.value) { viewport.value.scrollTop = 0; viewport.value.scrollLeft = 0 }
-  if (!ehentaiToken && !props.book.remote && ready.value && mode.value === 'page' && page.value + 1 < props.book.pages) { const image = new Image(); image.src = imageUrl(page.value + 1) }
+  if (!online && ready.value && mode.value === 'page' && page.value + 1 < props.book.pages) { const image = new Image(); image.src = imageUrl(page.value + 1) }
 })
 watch([page, ready], ([index, loaded], _, cleanup) => {
-  if (!loaded || (!props.book.remote && !ehentaiToken) || index + 1 >= props.book.pages) return
+  if (!loaded || !online || index + 1 >= props.book.pages) return
   const request = new AbortController()
   const timer = setTimeout(async () => {
     const url = `${baseUrl}/prefetch/${index}`
@@ -259,7 +273,7 @@ watch([page, ready], ([index, loaded], _, cleanup) => {
   }, 300)
   cleanup(() => { clearTimeout(timer); request.abort() })
 })
-watch(mode, locate)
+watch(mode, value => { if (toon) { try { localStorage.setItem('reader:toon-mode', value) } catch { /* Optional. */ } } void locate() })
 onMounted(async () => {
   oldOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden'
   resizeObserver = new ResizeObserver(measureFrame)
@@ -270,10 +284,10 @@ onMounted(async () => {
     if (saved.direction === 'rtl' || saved.direction === 'ttb') direction.value = saved.direction
     if (saved.swipe === false) swipe.value = false
   } catch { /* Optional preference. */ }
-  let fallback = { page: 0, mode: 'page' }
+  let fallback = { page: 0, mode: toon ? (localStorage.getItem('reader:toon-mode') === 'page' ? 'page' : 'scroll') : 'page' }
   try {
     const saved = localStorage.getItem(storageKey)
-    if (saved) fallback = ehentaiToken ? JSON.parse(saved) ?? fallback : { ...fallback, page: Number(saved) }
+    if (saved) fallback = ehentaiToken || toonOnline ? JSON.parse(saved) ?? fallback : { ...fallback, page: Number(saved) }
   } catch { /* Optional browser storage. */ }
   try {
     await pendingProgress.get(progressUrl)
@@ -308,12 +322,12 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
         <div v-if="broken" class="empty-state" @click.stop>이미지를 불러오지 못했습니다.<UButton variant="outline" color="neutral" @click="broken = false">다시 불러오기</UButton></div>
         <div v-else class="page-stage" :style="{ width: `${Math.max(frame.width, imageWidth)}px` }"><img class="page-image" :style="{ width: `${imageWidth}px` }" :src="imageUrl(page)" :alt="`${page + 1}페이지`" draggable="false" @load="measured" @error="broken = true; pageLoading = false"></div>
       </template>
-      <div v-else class="scroll-pages" :class="`scroll-${fit}`" :style="{ width: scrollWidth }"><ScrollPage v-for="index in book.pages" :key="index" :index="index - 1" :src="imageUrl(index - 1)" :fit="fit" :max-height="frame.height" :available-width="frame.width" :zoom="zoom" @visible="visible" /></div>
+      <div v-else class="scroll-pages" :class="`scroll-${fit}`" :style="{ width: scrollWidth }"><ScrollPage v-for="index in book.pages" :key="index" :index="index - 1" :src="imageUrl(index - 1)" :fit="fit" :max-height="frame.height" :available-width="frame.width" :zoom="zoom" @visible="visible" /><div v-if="nextEpisode" class="episode-end"><UButton size="xl" icon="i-lucide-chevron-right" @click.stop="flush(); emit('episode', 1)">다음 회차 · {{ nextEpisode.title }}</UButton></div></div>
     </div>
 
     <Transition name="chrome"><header v-if="controls" class="top-overlay" @click.stop>
       <UButton variant="ghost" color="neutral" class="icon-button" @click="close" aria-label="목록으로 돌아가기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6" /></svg></UButton>
-      <div class="book-heading"><span>{{ ehentaiToken ? 'E-HENTAI' : book.remote ? 'ONLINE READER' : 'MY LIBRARY' }}</span><h2>{{ book.title }}</h2></div>
+      <div class="book-heading"><span>{{ toon ? toon.seriesTitle : ehentaiToken ? 'E-HENTAI' : book.remote ? 'ONLINE READER' : 'MY LIBRARY' }}</span><h2>{{ book.title }}</h2></div>
       <div class="top-actions"><UButton variant="ghost" color="neutral" class="icon-button" @click="emit('detail')" aria-label="작품 상세 보기" title="작품 상세 보기"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button" @click="toggleSettings" aria-label="뷰어 설정" :aria-expanded="settings"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M9 4v6m6 4v6" /></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button hide-button" @click="controls = false; settings = false" aria-label="메뉴 숨기기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg></UButton></div>
     </header></Transition>
 
@@ -322,7 +336,7 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
       <fieldset><legend>이미지 맞춤</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '화면 맞춤', value: 'screen' }, { label: '폭 맞춤', value: 'width' }, { label: '원본 크기', value: 'original' }]" :model-value="fit" @update:model-value="value => setFit(value as 'width' | 'screen' | 'original')" /></fieldset>
       <fieldset><legend>읽기 방식</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '페이지 넘김', value: 'page' }, { label: '세로 스크롤', value: 'scroll' }]" :model-value="mode" @update:model-value="value => mode = value as 'page' | 'scroll'" /></fieldset>
       <fieldset><legend>읽기 방향</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '오른쪽', icon: 'i-lucide-arrow-right', value: 'ltr' }, { label: '왼쪽', icon: 'i-lucide-arrow-left', value: 'rtl' }, { label: '세로', icon: 'i-lucide-arrow-down', value: 'ttb' }]" :model-value="direction" @update:model-value="value => direction = value as 'ltr' | 'rtl' | 'ttb'" /></fieldset>
-      <div class="zoom-row"><span>스와이프로 넘기기</span><USwitch v-model="swipe" aria-label="스와이프로 페이지 넘기기" /></div>
+      <div v-if="toon" class="read-actions episode-actions"><UButton variant="ghost" color="neutral" size="sm" block icon="i-lucide-chevron-left" :disabled="!previousEpisode" @click="flush(); emit('episode', -1)">이전 회차</UButton><UButton variant="ghost" color="neutral" size="sm" block trailing-icon="i-lucide-chevron-right" :disabled="!nextEpisode" @click="flush(); emit('episode', 1)">다음 회차</UButton></div><div class="zoom-row"><span>스와이프로 넘기기</span><USwitch v-model="swipe" aria-label="스와이프로 페이지 넘기기" /></div>
       <div class="zoom-row"><span>확대 (%)</span><UInputNumber v-model="zoom" variant="soft" :min="50" :max="300" :step="25" size="sm" class="w-32" aria-label="확대 비율" /></div>
       <div class="read-actions"><UButton variant="ghost" color="neutral" size="sm" block v-if="!ehentaiToken" @click="setRead(true)">읽음으로 표시</UButton><UButton variant="ghost" color="neutral" size="sm" block @click="setRead(false)">안 읽음으로 변경</UButton></div><p class="sync-status" role="status">{{ status }}</p><p class="keyboard-hint">← → 페이지 이동 · Space 메뉴</p>
     </aside></Transition>
@@ -336,16 +350,17 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
     <p v-if="detailError" class="detail-error" role="alert">{{ detailError }}</p>
     <dialog ref="endPrompt" class="end-prompt" tabindex="-1" aria-labelledby="end-prompt-title">
       <h2 id="end-prompt-title">{{ promptReason === 'end' ? '마지막 페이지입니다' : '뷰어를 닫을까요?' }}</h2>
-      <p>{{ promptReason === 'end' ? '뷰어를 닫을까요?' : '뒤로 가기 동작이 감지되었습니다.' }}</p>
+      <p>{{ promptReason === 'end' ? (nextEpisode ? `다음 회차: ${nextEpisode.title}` : '뷰어를 닫을까요?') : '뒤로 가기 동작이 감지되었습니다.' }}</p>
       <div class="end-actions">
+        <UButton v-if="promptReason === 'end' && nextEpisode" type="button" class="primary-button next-episode" @click="endPrompt?.close(); flush(); emit('episode', 1)">다음 회차</UButton>
         <UButton variant="outline" color="neutral" type="button" @click="endPrompt?.close()">계속 보기</UButton>
-        <UButton type="button" class="primary-button" @click="endPrompt?.close(); close()">뷰어 닫기</UButton>
+        <UButton type="button" :variant="promptReason === 'end' && nextEpisode ? 'outline' : 'solid'" :color="promptReason === 'end' && nextEpisode ? 'neutral' : 'primary'" :class="{ 'primary-button': !(promptReason === 'end' && nextEpisode) }" @click="endPrompt?.close(); close()">뷰어 닫기</UButton>
       </div>
     </dialog>
   </section>
 </template>
 <style scoped>
-.reader{position:fixed;inset:0;z-index:1000;background:#08090c;color:#f3f5fa;font-family:Inter,system-ui,sans-serif;isolation:isolate}.reader-viewport{position:absolute;inset:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-x pan-y pinch-zoom;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:#373943 transparent;outline:none}.page-stage{min-height:100%;display:grid;place-items:center}.page-image{display:block;max-width:none;height:auto;user-select:none}.scroll-pages{margin:0 auto}.scroll-original{min-width:100%}.reader button{cursor:pointer}.reader button:disabled{opacity:.25;cursor:default}.reader button:focus-visible,.reader input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.reader svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}.icon-button{width:44px;height:44px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:14px;background:#ffffff0b;backdrop-filter:blur(12px)}.icon-button:hover{background:#ffffff18}.top-overlay{position:absolute;inset:0 0 auto;margin:0;max-width:none;padding:max(18px,env(safe-area-inset-top)) 28px 38px;display:flex;gap:16px;align-items:center;background:linear-gradient(#090b10ee,#090b10b8 70%,transparent);pointer-events:none}.top-overlay>*{pointer-events:auto}.book-heading{flex:1;min-width:0}.book-heading>span{font-size:10px;letter-spacing:.18em;color:#b4bcce}.book-heading h2{font-size:16px;font-weight:550;line-height:1.4;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;margin:4px 0 0}.top-actions{display:flex;gap:8px}.bottom-overlay{position:absolute;inset:auto 0 0;display:flex;flex-direction:column;align-items:center;padding:36px 24px max(18px,env(safe-area-inset-bottom));background:linear-gradient(transparent,#090b10ce 40%,#090b10f2);pointer-events:none}.bottom-overlay>*{pointer-events:auto}.page-row{display:flex;align-items:center;gap:20px}.page-row{position:relative}.page-loading{position:absolute;top:50%;left:100%;margin-left:12px;transform:translateY(-50%);display:grid;place-items:center;pointer-events:none;color:#f3f5fa}.reveal-button .page-loading{left:auto;right:100%;margin:0 10px 0 0}.loading-fade-enter-active,.loading-fade-leave-active{transition:opacity .15s}.loading-fade-enter-from,.loading-fade-leave-to{opacity:0}.page-count{display:flex;align-items:center;gap:8px;font-size:13px;font-variant-numeric:tabular-nums;color:#aeb6c8}.page-count input{appearance:textfield}.page-count input::-webkit-inner-spin-button{appearance:none}.page-slider{width:min(460px,80vw);margin:14px 0 6px}.tap-hint{font-size:11px;color:#99a1b3;margin-top:4px}.settings-panel{position:absolute;right:28px;top:88px;width:340px;padding:20px;border-radius:22px;background:#191c25ed;box-shadow:0 20px 80px #0009;backdrop-filter:blur(24px);max-height:calc(100dvh - 230px);overflow:auto}.panel-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.panel-title h3{margin:0;font-size:16px;font-weight:600}.settings-panel fieldset{border:0;padding:0;margin:0 0 20px;min-width:0}.settings-panel legend{font-size:12px;color:#a9b1c3;margin-bottom:10px;padding:0}.zoom-row{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#a9b1c3}.zoom-row>div{display:flex;align-items:center;gap:8px}.read-actions{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:4px;margin-top:20px;padding:4px;border-radius:calc(var(--ui-radius)*2);background:var(--ui-bg-elevated)}.sync-status{font-size:11px;color:#a6b7a9;margin:22px 0 0}.keyboard-hint{font-size:10px;color:#8f98aa;line-height:1.6;margin:8px 0 0}.reveal-button{min-height:44px;position:absolute;right:20px;bottom:max(18px,env(safe-area-inset-bottom));display:flex;align-items:center;gap:8px;background:#1519239c;border-radius:24px;padding:0 14px;backdrop-filter:blur(12px);opacity:.65}.reveal-button span{font-size:11px;font-variant-numeric:tabular-nums}.empty-state{min-height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;font-size:13px;color:#99a1b3}.empty-state button{border-radius:12px;padding:8px 16px;background:#202634}.loader{width:24px;height:24px;border:2px solid #ffffff20;border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite}.chrome-enter-active,.chrome-leave-active,.panel-enter-active,.panel-leave-active{transition:opacity .18s ease,transform .18s ease}.chrome-enter-from,.chrome-leave-to{opacity:0}.panel-enter-from,.panel-leave-to{opacity:0;transform:translateY(-8px)}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:600px){.top-overlay{padding:12px 12px 30px;gap:10px}.book-heading h2{font-size:13px}.book-heading>span{font-size:9px}.top-actions{gap:4px}.icon-button{width:40px;height:44px;border-radius:12px}.hide-button{display:none}.settings-panel{top:76px;left:12px;right:12px;width:auto;max-height:calc(100dvh - 220px);padding:18px;border-radius:20px}.bottom-overlay{padding-left:12px;padding-right:12px}.page-row{gap:16px}.reveal-button{right:12px}.keyboard-hint{display:none}}@media(prefers-reduced-motion:reduce){.chrome-enter-active,.chrome-leave-active,.panel-enter-active,.panel-leave-active{transition:none}.loader{animation:none}}
+.reader{position:fixed;inset:0;z-index:1000;background:#08090c;color:#f3f5fa;font-family:Inter,system-ui,sans-serif;isolation:isolate}.reader-viewport{position:absolute;inset:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-x pan-y pinch-zoom;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:#373943 transparent;outline:none}.page-stage{min-height:100%;display:grid;place-items:center}.page-image{display:block;max-width:none;height:auto;user-select:none}.scroll-pages{margin:0 auto}.scroll-original{min-width:100%}.reader button{cursor:pointer}.reader button:disabled{opacity:.25;cursor:default}.reader button:focus-visible,.reader input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.reader svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}.icon-button{width:44px;height:44px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:14px;background:#ffffff0b;backdrop-filter:blur(12px)}.icon-button:hover{background:#ffffff18}.top-overlay{position:absolute;inset:0 0 auto;margin:0;max-width:none;padding:max(18px,env(safe-area-inset-top)) 28px 38px;display:flex;gap:16px;align-items:center;background:linear-gradient(#090b10ee,#090b10b8 70%,transparent);pointer-events:none}.top-overlay>*{pointer-events:auto}.book-heading{flex:1;min-width:0}.book-heading>span{font-size:10px;letter-spacing:.18em;color:#b4bcce}.book-heading h2{font-size:16px;font-weight:550;line-height:1.4;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;margin:4px 0 0}.top-actions{display:flex;gap:8px}.bottom-overlay{position:absolute;inset:auto 0 0;display:flex;flex-direction:column;align-items:center;padding:36px 24px max(18px,env(safe-area-inset-bottom));background:linear-gradient(transparent,#090b10ce 40%,#090b10f2);pointer-events:none}.bottom-overlay>*{pointer-events:auto}.page-row{display:flex;align-items:center;gap:20px}.page-row{position:relative}.page-loading{position:absolute;top:50%;left:100%;margin-left:12px;transform:translateY(-50%);display:grid;place-items:center;pointer-events:none;color:#f3f5fa}.reveal-button .page-loading{left:auto;right:100%;margin:0 10px 0 0}.loading-fade-enter-active,.loading-fade-leave-active{transition:opacity .15s}.loading-fade-enter-from,.loading-fade-leave-to{opacity:0}.page-count{display:flex;align-items:center;gap:8px;font-size:13px;font-variant-numeric:tabular-nums;color:#aeb6c8}.page-count input{appearance:textfield}.page-count input::-webkit-inner-spin-button{appearance:none}.page-slider{width:min(460px,80vw);margin:14px 0 6px}.tap-hint{font-size:11px;color:#99a1b3;margin-top:4px}.settings-panel{position:absolute;right:28px;top:88px;width:340px;padding:20px;border-radius:22px;background:#191c25ed;box-shadow:0 20px 80px #0009;backdrop-filter:blur(24px);max-height:calc(100dvh - 230px);overflow:auto}.panel-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.panel-title h3{margin:0;font-size:16px;font-weight:600}.settings-panel fieldset{border:0;padding:0;margin:0 0 20px;min-width:0}.settings-panel legend{font-size:12px;color:#a9b1c3;margin-bottom:10px;padding:0}.zoom-row{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#a9b1c3}.zoom-row>div{display:flex;align-items:center;gap:8px}.read-actions{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:4px;margin-top:20px;padding:4px;border-radius:calc(var(--ui-radius)*2);background:var(--ui-bg-elevated)}.episode-actions{margin:0 0 20px}.episode-end{display:flex;justify-content:center;padding:32px 16px 120px}.sync-status{font-size:11px;color:#a6b7a9;margin:22px 0 0}.keyboard-hint{font-size:10px;color:#8f98aa;line-height:1.6;margin:8px 0 0}.reveal-button{min-height:44px;position:absolute;right:20px;bottom:max(18px,env(safe-area-inset-bottom));display:flex;align-items:center;gap:8px;background:#1519239c;border-radius:24px;padding:0 14px;backdrop-filter:blur(12px);opacity:.65}.reveal-button span{font-size:11px;font-variant-numeric:tabular-nums}.empty-state{min-height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;font-size:13px;color:#99a1b3}.empty-state button{border-radius:12px;padding:8px 16px;background:#202634}.loader{width:24px;height:24px;border:2px solid #ffffff20;border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite}.chrome-enter-active,.chrome-leave-active,.panel-enter-active,.panel-leave-active{transition:opacity .18s ease,transform .18s ease}.chrome-enter-from,.chrome-leave-to{opacity:0}.panel-enter-from,.panel-leave-to{opacity:0;transform:translateY(-8px)}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:600px){.top-overlay{padding:12px 12px 30px;gap:10px}.book-heading h2{font-size:13px}.book-heading>span{font-size:9px}.top-actions{gap:4px}.icon-button{width:40px;height:44px;border-radius:12px}.hide-button{display:none}.settings-panel{top:76px;left:12px;right:12px;width:auto;max-height:calc(100dvh - 220px);padding:18px;border-radius:20px}.bottom-overlay{padding-left:12px;padding-right:12px}.page-row{gap:16px}.reveal-button{right:12px}.keyboard-hint{display:none}}@media(prefers-reduced-motion:reduce){.chrome-enter-active,.chrome-leave-active,.panel-enter-active,.panel-leave-active{transition:none}.loader{animation:none}}
 </style>
 
 <style scoped>.page-row.reversed svg{transform:rotate(180deg)}</style>
@@ -356,7 +371,7 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
 .end-prompt::backdrop{background:#0009}
 .end-prompt h2{margin:0;font-size:20px}
 .end-prompt p{margin:8px 0 20px}
-.end-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.end-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.end-actions .next-episode{grid-column:1/-1;justify-content:center}
 .end-actions button{min-height:44px;padding:8px;justify-content:center}
 </style>
 

@@ -3,7 +3,7 @@ import type { EhentaiGallery } from './EhentaiSearch.vue'
 export type EhentaiDetails = Pick<EhentaiGallery, 'thumb' | 'category' | 'posted' | 'rating' | 'tags'>
 export type History = { key: string; title: string; page: number; total: number; furthest: number; completed: boolean; updated_at: number; ehentai?: EhentaiDetails }
 export const historySources = [
-  { id: 'all', label: '전체' }, { id: 'hitomi', label: 'Hitomi' }, { id: 'ehentai', label: 'E-Hentai' },
+  { id: 'all', label: '전체' }, { id: 'hitomi', label: 'Hitomi' }, { id: 'ehentai', label: 'E-Hentai' }, { id: 'toon', label: '만화' },
 ] as const
 export const pendingProgress = new Map<string, Promise<void>>()
 export const readingHistory = ref<Record<string, History>>({})

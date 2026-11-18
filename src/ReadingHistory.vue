@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ToonSeries } from './ToonSearch.vue'
 import AppSelect from './AppSelect.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { historySources, readingHistory, refreshReading, historyError, resetReading, type History } from './reading-history'
@@ -11,9 +12,10 @@ import SourceTabs from './SourceTabs.vue'
 import { ehentaiCover } from './ehentai-cover'
 const props = defineProps<{ books: {id:string;title:string;pages:number;readable?:boolean}[] }>()
 type LocalBook = (typeof props.books)[number]
-const emit = defineEmits<{ read: [LocalBook & {remote?:boolean}]; localDetail: [LocalBook]; remoteDetail: [Gallery]; ehentaiRead: [EhentaiGallery, number, string]; ehentaiDetail: [EhentaiGallery] }>()
+const emit = defineEmits<{ read: [LocalBook & {remote?:boolean}]; localDetail: [LocalBook]; remoteDetail: [Gallery]; ehentaiRead: [EhentaiGallery, number, string]; ehentaiDetail: [EhentaiGallery]; toonRead: ['toon' | 'wolf', number, number, string]; toonDetail: [ToonSeries] }>()
 const error = ref(''), busy = ref('')
 const filter = ref('all')
+const comicSite = ref<'all' | 'toon' | 'wolf'>('all')
 const cookieName = 'hitomi-history-source'
 const savedSource = document.cookie.split(';').map(cookie => cookie.trim()).find(cookie => cookie.startsWith(cookieName + '='))?.slice(cookieName.length + 1)
 const source = ref(historySources.find(option => option.id === savedSource)?.id ?? 'all')
@@ -42,17 +44,23 @@ function coverUrl(entry: History) {
     const url = `/api/galleries/${entry.key.slice(7)}/cover`
     if (!coverErrors.value.has(url)) return url
   }
+  const toon = entry.key.match(/^(toon|wolf):(\d+):\d+$/)
+  if (toon) {
+    const url = `/api/${toon[1]}/series/${toon[2]}/cover`
+    if (!coverErrors.value.has(url)) return url
+  }
   const thumb = ehentaiCover(entry.ehentai?.thumb)
   if (thumb && !coverErrors.value.has(thumb)) return thumb
   return ''
 }
-const entryId = (entry: History) => entry.key.match(/^(?:remote|ehentai|ehentai-library):(\d+)/)?.[1] ?? null
-const entrySource = (entry: History) => entry.key.startsWith('ehentai:') || entry.key.startsWith('ehentai-library:') ? 'ehentai' : 'hitomi'
+const entryId = (entry: History) => entry.key.match(/^(?:remote|ehentai|ehentai-library|toon|wolf):(\d+)/)?.[1] ?? null
+const entrySource = (entry: History) => entry.key.startsWith('toon:') || entry.key.startsWith('wolf:') ? 'toon' : entry.key.startsWith('ehentai:') || entry.key.startsWith('ehentai-library:') ? 'ehentai' : 'hitomi'
 const items = computed(() => [...new Map(Object.values(readingHistory.value).map(entry => [entry.key, entry])).values()]
   .filter(entry => (source.value === 'all' || source.value === entrySource(entry))
+    && (source.value !== 'toon' || comicSite.value === 'all' || entry.key.startsWith(comicSite.value + ':'))
     && (filter.value === 'all' || (filter.value === 'read' ? entry.completed : !entry.completed)))
   .sort((a, b) => b.updated_at - a.updated_at))
-const { shown: shownItems, more, sentinel } = useIncremental(() => items.value, () => [source.value, filter.value, layout.value])
+const { shown: shownItems, more, sentinel } = useIncremental(() => items.value, () => [source.value, comicSite.value, filter.value, layout.value])
 watch(layout, () => scrollToControls('.history-controls'))
 function date(value: number) { return new Date(value * 1000).toLocaleString() }
 async function open(entry: History, detail = false) {
@@ -60,6 +68,13 @@ async function open(entry: History, detail = false) {
   try {
     const local = localBooks.value.get(entry.key)
     if (local) { if (detail) emit('localDetail', local); else emit('read', local); return }
+    const toon = entry.key.match(/^(toon|wolf):(\d+):(\d+)$/)
+    if (toon) {
+      const site = toon[1] as 'toon' | 'wolf'
+      if (detail) emit('toonDetail', { id: Number(toon[2]), title: entry.title, thumb: null, date: null, site })
+      else emit('toonRead', site, Number(toon[2]), Number(toon[3]), entry.title)
+      return
+    }
     const ehentai = entry.key.match(/^ehentai:([1-9]\d*):([a-f0-9]{10})$/)
     if (ehentai) {
       const [, id, token] = ehentai
@@ -99,13 +114,14 @@ onMounted(refreshReading)
     <div class="toolbar history-toolbar"><h2>읽기 기록</h2><UButton variant="soft" color="neutral" @click="coverErrors.clear(); refreshReading()">새로고침</UButton></div>
     <SourceTabs v-model="source" label="읽기 기록 출처" />
     <div class="history-controls">
-      <label>표시<AppSelect v-model="filter" label="표시" :options="[{'value': 'all', 'label': '전체'}, {'value': 'reading', 'label': '읽는 중'}, {'value': 'read', 'label': '읽음'}]" /></label>
+      <div class="history-filters"><label>표시<AppSelect v-model="filter" label="표시" :options="[{'value': 'all', 'label': '전체'}, {'value': 'reading', 'label': '읽는 중'}, {'value': 'read', 'label': '읽음'}]" /></label>
+      <label v-if="source === 'toon'">사이트<AppSelect v-model="comicSite" label="사이트" :options="[{'value': 'all', 'label': '전체'}, {'value': 'toon', 'label': '일일툰'}, {'value': 'wolf', 'label': '늑대툰'}]" /></label></div>
       <ViewToggle v-model="layout" label="읽기 기록 표시 방식" />
     </div>
     <p v-if="error || historyError" role="alert">{{ error || historyError }}</p>
     <p v-if="!items.length">아직 읽기 기록이 없습니다.</p>
     <div class="results history-results" :class="{ 'results-list': layout === 'list' }">
-      <GalleryCard v-for="entry in shownItems" :key="entry.key" :layout="layout" :title="entry.title.startsWith('remote:') ? `작품 #${entry.key.slice(7)}` : entry.title" :cover="coverUrl(entry)" :id="entryId(entry)" :info="entrySource(entry) === 'ehentai' ? 'E-Hentai' : 'Hitomi'" :badge="entry.completed ? { label: '읽음', color: 'success' } : { label: `읽는 중 ${entry.furthest}/${entry.total || '?'}`, color: 'primary' }" :date="`읽은 날짜 ${date(entry.updated_at)}`" @detail="open(entry, true)" @cover-error="src => coverErrors.add(src)">
+      <GalleryCard v-for="entry in shownItems" :key="entry.key" :layout="layout" :title="entry.title.startsWith('remote:') ? `작품 #${entry.key.slice(7)}` : entry.title" :cover="coverUrl(entry)" :id="entryId(entry)" :info="({ ehentai: 'E-Hentai', toon: entry.key.startsWith('wolf:') ? '늑대툰' : '일일툰', hitomi: 'Hitomi' } as const)[entrySource(entry)]" :badge="entry.completed ? { label: '읽음', color: 'success' } : { label: `읽는 중 ${entry.furthest}/${entry.total || '?'}`, color: 'primary' }" :date="`읽은 날짜 ${date(entry.updated_at)}`" @detail="open(entry, true)" @cover-error="src => coverErrors.add(src)">
         <UButton :disabled="!!busy" @click="open(entry)">{{ busy === entry.key ? '불러오는 중…' : '이어 읽기' }}</UButton>
         <UButton variant="outline" color="neutral" :disabled="!!busy" @click="markUnread(entry)">{{ layout === 'list' ? '안 읽음' : '안 읽음으로 변경' }}</UButton>
       </GalleryCard>
@@ -116,6 +132,7 @@ onMounted(refreshReading)
 
 <style scoped>
 .history-toolbar{margin-bottom:12px}
+.history-filters{display:flex;flex-wrap:wrap;gap:12px}
 .history-controls{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px}
 .history-results{--result-actions-columns:2;margin-top:16px}
 </style>
