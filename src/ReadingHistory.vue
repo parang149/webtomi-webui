@@ -55,11 +55,35 @@ function coverUrl(entry: History) {
 }
 const entryId = (entry: History) => entry.key.match(/^(?:remote|ehentai|ehentai-library|toon|wolf):(\d+)/)?.[1] ?? null
 const entrySource = (entry: History) => entry.key.startsWith('toon:') || entry.key.startsWith('wolf:') ? 'toon' : entry.key.startsWith('ehentai:') || entry.key.startsWith('ehentai-library:') ? 'ehentai' : 'hitomi'
-const items = computed(() => [...new Map(Object.values(readingHistory.value).map(entry => [entry.key, entry])).values()]
-  .filter(entry => (source.value === 'all' || source.value === entrySource(entry))
-    && (source.value !== 'toon' || comicSite.value === 'all' || entry.key.startsWith(comicSite.value + ':'))
-    && (filter.value === 'all' || (filter.value === 'read' ? entry.completed : !entry.completed)))
-  .sort((a, b) => b.updated_at - a.updated_at))
+/** One card per entry; 만화 episodes of the same series share one card (latest episode first). */
+type Item = { key: string; entry: History; group?: History[] }
+const items = computed(() => {
+  const list = [...new Map(Object.values(readingHistory.value).map(entry => [entry.key, entry])).values()]
+    .filter(entry => (source.value === 'all' || source.value === entrySource(entry))
+      && (source.value !== 'toon' || comicSite.value === 'all' || entry.key.startsWith(comicSite.value + ':'))
+      && (filter.value === 'all' || (filter.value === 'read' ? entry.completed : !entry.completed)))
+    .sort((a, b) => b.updated_at - a.updated_at)
+  const result: Item[] = [], series = new Map<string, Item>()
+  for (const entry of list) {
+    const key = entry.key.match(/^((?:toon|wolf):\d+):\d+$/)?.[1]
+    const item = key && series.get(key)
+    if (item) { item.group!.push(entry); continue }
+    const next: Item = key ? { key, entry, group: [entry] } : { key: entry.key, entry }
+    if (key) series.set(key, next)
+    result.push(next)
+  }
+  return result
+})
+/** Series name from its episode titles ("친구 게임 129화" → "친구 게임"). */
+function seriesTitle(item: Item) {
+  const titles = item.group!.map(entry => entry.title.trim())
+  let name = titles[0]
+  for (const title of titles.slice(1)) { let i = 0; while (i < name.length && name[i] === title[i]) i++; name = name.slice(0, i) }
+  if (titles.length < 2) name = name.replace(/\d+(?:\.\d+)?\s*(?:화|회|話|부)?\s*$/, '')
+  name = name.replace(/[\s\d.\-_:(\[]+$/, '').trim()
+  return name || `작품 #${entryId(item.entry)}`
+}
+const episodeName = (item: Item) => { const name = seriesTitle(item), title = item.entry.title.trim(); return title.startsWith(name) && title.length > name.length ? title.slice(name.length).trim() : title }
 const { shown: shownItems, more, sentinel } = useIncremental(() => items.value, () => [source.value, comicSite.value, filter.value, layout.value])
 watch(layout, () => scrollToControls('.history-controls'))
 function date(value: number) { return new Date(value * 1000).toLocaleString() }
@@ -67,11 +91,11 @@ async function open(entry: History, detail = false) {
   error.value = ''; busy.value = entry.key
   try {
     const local = localBooks.value.get(entry.key)
-    if (local) { if (detail) emit('localDetail', local); else emit('read', local); return }
+    if (local && !(detail && /^(toon|wolf):/.test(entry.key))) { if (detail) emit('localDetail', local); else emit('read', local); return }
     const toon = entry.key.match(/^(toon|wolf):(\d+):(\d+)$/)
     if (toon) {
       const site = toon[1] as 'toon' | 'wolf'
-      if (detail) emit('toonDetail', { id: Number(toon[2]), title: entry.title, thumb: null, date: null, site })
+      if (detail) emit('toonDetail', { id: Number(toon[2]), title: seriesTitle(items.value.find(item => item.group?.includes(entry)) ?? { key: '', entry, group: [entry] }), thumb: null, date: null, site })
       else emit('toonRead', site, Number(toon[2]), Number(toon[3]), entry.title)
       return
     }
@@ -121,9 +145,10 @@ onMounted(refreshReading)
     <p v-if="error || historyError" role="alert">{{ error || historyError }}</p>
     <p v-if="!items.length">아직 읽기 기록이 없습니다.</p>
     <div class="results history-results" :class="{ 'results-list': layout === 'list' }">
-      <GalleryCard v-for="entry in shownItems" :key="entry.key" :layout="layout" :title="entry.title.startsWith('remote:') ? `작품 #${entry.key.slice(7)}` : entry.title" :cover="coverUrl(entry)" :id="entryId(entry)" :info="({ ehentai: 'E-Hentai', toon: entry.key.startsWith('wolf:') ? '늑대툰' : '일일툰', hitomi: 'Hitomi' } as const)[entrySource(entry)]" :badge="entry.completed ? { label: '읽음', color: 'success' } : { label: `읽는 중 ${entry.furthest}/${entry.total || '?'}`, color: 'primary' }" :date="`읽은 날짜 ${date(entry.updated_at)}`" @detail="open(entry, true)" @cover-error="src => coverErrors.add(src)">
+      <GalleryCard v-for="{ key, entry, group } in shownItems" :key="key" :layout="layout" :title="group ? seriesTitle({ key, entry, group }) : entry.title.startsWith('remote:') ? `작품 #${entry.key.slice(7)}` : entry.title" :cover="coverUrl(entry)" :id="entryId(entry)" :info="group ? `${entry.key.startsWith('wolf:') ? '늑대툰' : '일일툰'} · 최근 ${episodeName({ key, entry, group })} · 기록 ${group.length}화` : ({ ehentai: 'E-Hentai', toon: '일일툰', hitomi: 'Hitomi' } as const)[entrySource(entry)]" :badge="entry.completed ? { label: '읽음', color: 'success' } : { label: `읽는 중 ${entry.furthest}/${entry.total || '?'}`, color: 'primary' }" :date="`읽은 날짜 ${date(entry.updated_at)}`" @detail="open(entry, true)" @cover-error="src => coverErrors.add(src)">
         <UButton :disabled="!!busy" @click="open(entry)">{{ busy === entry.key ? '불러오는 중…' : '이어 읽기' }}</UButton>
-        <UButton variant="outline" color="neutral" :disabled="!!busy" @click="markUnread(entry)">{{ layout === 'list' ? '안 읽음' : '안 읽음으로 변경' }}</UButton>
+        <UButton v-if="group" variant="outline" color="neutral" :disabled="!!busy" @click="open(entry, true)">회차 보기</UButton>
+        <UButton v-else variant="outline" color="neutral" :disabled="!!busy" @click="markUnread(entry)">{{ layout === 'list' ? '안 읽음' : '안 읽음으로 변경' }}</UButton>
       </GalleryCard>
     </div>
     <div v-if="more" ref="sentinel" class="load-more" aria-hidden="true" />
