@@ -2,7 +2,7 @@ import { ref } from 'vue'
 export type RedditConfig = { enabled: boolean; subreddit: string; subreddits: string[]; all_media: boolean; show_titles: boolean }
 export type RedditSubscribers = { count: number | null; updated_at: number | null; attempted_at: number | null }
 export type RedditStatus = { config: RedditConfig; installed: boolean; version: string; cookies: boolean; busy: boolean; installing: boolean; stopping: boolean; message: string; exhausted: boolean; subscribers?: Record<string, RedditSubscribers>; subscribers_refreshing?: boolean; subscribers_message?: string }
-export type RedditItem = { id: string; title: string; kind: 'image' | 'gif' | 'video'; created: number; downloaded_at?: number | null; sequence?: number; subreddit: string }
+export type RedditItem = { id: string; title: string; kind: 'image' | 'gif' | 'video'; created: number; downloaded_at?: number | null; sequence?: number; subreddit: string; seen_at?: number | null; is_new?: boolean }
 export const redditStatus = ref<RedditStatus>()
 export async function redditRequest(path: string, init?: RequestInit) {
   const response = await fetch(`/api/reddit/${path}`, init)

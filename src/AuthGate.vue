@@ -6,6 +6,7 @@ import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 import App from './App.vue'
 import SettingsPane from './SettingsPane.vue'
 import RedditSettings from './RedditSettings.vue'
+import RedditPullDebug from './RedditPullDebug.vue'
 import { notify } from './notifications'
 import LibraryApiSettings from './LibraryApiSettings.vue'
 import { startOrganize } from './organize-job'
@@ -198,6 +199,7 @@ onUnmounted(()=>{window.removeEventListener('popstate',syncScreen);window.remove
           <MaintenancePane v-else-if="section === 'logs'" logs />
           <LibraryApiSettings v-else-if="section === 'api'" />
           <div v-else-if="section === 'debug'" class="search-preferences">
+            <RedditPullDebug />
             <UButton variant="outline" color="neutral" type="button" @click="notify('debug', '테스트 알림입니다.')">알림 테스트</UButton>
             <RequestStats />
           </div>

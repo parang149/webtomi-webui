@@ -2,12 +2,23 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import ScrollPage from './ScrollPage.vue'
 import { refreshReading, markReading, pendingProgress, resetReading, type EhentaiDetails } from './reading-history'
-const props = defineProps<{ book: { id: string; title: string; pages: number; initialPage?: number; media?: { url: string; kind: 'image' | 'gif' | 'video'; title: string }[]; remote?: boolean; ehentaiToken?: string; ehentaiDetails?: EhentaiDetails; toon?: { site?: 'toon' | 'wolf'; series: number; seriesTitle: string; episodes: { id: number; title: string }[]; local?: boolean }; metadata?: { toon_episode?: number } }; detailError?: string; backPrompt?: number; detailOpen?: boolean }>()
-const emit = defineEmits<{ close: []; detail: [page?: number]; episode: [number] }>()
+const props = defineProps<{ book: { id: string; title: string; pages: number; initialPage?: number; media?: { url: string; kind: 'image' | 'gif' | 'video'; title: string; badge?: 'new' | 'seen' }[]; remote?: boolean; ehentaiToken?: string; ehentaiDetails?: EhentaiDetails; toon?: { site?: 'toon' | 'wolf'; series: number; seriesTitle: string; episodes: { id: number; title: string }[]; local?: boolean }; metadata?: { toon_episode?: number } }; detailError?: string; backPrompt?: number; detailOpen?: boolean }>()
+const emit = defineEmits<{ close: []; detail: [page?: number]; episode: [number]; 'media-shown': [index: number] }>()
 const page = ref(props.book.initialPage ?? 0)
 const mixed = !!props.book.media
 const currentMedia = computed(() => props.book.media?.[page.value])
 const mixedVideo = ref<HTMLVideoElement>()
+const displayedMedia = ref('')
+function reportMediaShown() {
+  if (!mixed || !displayedMedia.value || props.detailOpen || document.hidden) return
+  const index = page.value, url = imageUrl(index)
+  requestAnimationFrame(() => {
+    if (!disposed && index === page.value && displayedMedia.value === url && !document.hidden && !props.detailOpen) emit('media-shown', index)
+  })
+}
+function mediaLoaded() { if (mixed) { displayedMedia.value = imageUrl(page.value); reportMediaShown() } }
+watch(page, () => { displayedMedia.value = '' })
+watch(() => props.detailOpen, () => reportMediaShown())
 watch(() => props.detailOpen, open => { if (open) mixedVideo.value?.pause() })
 const mode = ref<'page' | 'scroll'>('page')
 const direction = ref<'ltr' | 'rtl' | 'ttb'>('ltr')
@@ -81,6 +92,7 @@ function measured(event: Event) {
   pageLoading.value = false
   const image = event.target as HTMLImageElement
   dimensions.value = { width: image.naturalWidth || 1, height: image.naturalHeight || 1 }
+  if (image.naturalWidth > 0 && image.naturalHeight > 0) mediaLoaded()
 }
 function measureFrame() { if (viewport.value) frame.value = { width: viewport.value.clientWidth, height: viewport.value.clientHeight } }
 function setFit(value: 'width' | 'screen' | 'original') { fit.value = value; zoom.value = 100; void nextTick(() => requestAnimationFrame(measureFrame)) }
@@ -245,7 +257,7 @@ async function setRead(completed: boolean) {
     status.value = '읽기 상태를 변경하지 못했습니다'
   }
 }
-function visibility() { if (document.visibilityState === 'hidden') flush() }
+function visibility() { if (document.visibilityState === 'hidden') flush(); else reportMediaShown() }
 watch([page, mode], () => {
   broken.value = false
   pageLoading.value = mode.value === 'page'
@@ -325,15 +337,15 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
       <div v-if="!ready" class="empty-state"><span class="loader" />읽던 위치를 불러오는 중</div>
       <template v-else-if="mode === 'page'">
         <div v-if="broken" class="empty-state" @click.stop>이미지를 불러오지 못했습니다.<UButton variant="outline" color="neutral" @click="broken = false">다시 불러오기</UButton></div>
-        <video ref="mixedVideo" v-else-if="currentMedia?.kind === 'video'" :key="page" :src="imageUrl(page)" class="mixed-video" controls playsinline preload="metadata" @click.stop @loadedmetadata="pageLoading = false" @error="broken = true; pageLoading = false" />
-        <div v-else class="page-stage" :style="{ width: `${Math.max(frame.width, imageWidth)}px` }"><img class="page-image" :style="{ width: `${imageWidth}px` }" :src="imageUrl(page)" :alt="`${page + 1}페이지`" draggable="false" @load="measured" @error="broken = true; pageLoading = false"></div>
+        <video ref="mixedVideo" v-else-if="currentMedia?.kind === 'video'" :key="page" :src="imageUrl(page)" class="mixed-video" controls playsinline preload="metadata" @click.stop @loadedmetadata="pageLoading = false" @loadeddata="mediaLoaded" @playing="mediaLoaded" @error="broken = true; pageLoading = false; displayedMedia = ''" />
+        <div v-else class="page-stage" :style="{ width: `${Math.max(frame.width, imageWidth)}px` }"><img :key="mixed ? page : undefined" class="page-image" :style="{ width: `${imageWidth}px` }" :src="imageUrl(page)" :alt="`${page + 1}페이지`" draggable="false" @load="measured" @error="broken = true; pageLoading = false; displayedMedia = ''"></div>
       </template>
       <div v-else class="scroll-pages" :class="`scroll-${fit}`" :style="{ width: scrollWidth }"><ScrollPage v-for="index in book.pages" :key="index" :index="index - 1" :src="imageUrl(index - 1)" :fit="fit" :max-height="frame.height" :available-width="frame.width" :zoom="zoom" @visible="visible" /><div v-if="nextEpisode" class="episode-end"><UButton size="xl" icon="i-lucide-chevron-right" @click.stop="flush(); emit('episode', 1)">다음 회차 · {{ nextEpisode.title }}</UButton></div></div>
     </div>
 
     <Transition name="chrome"><header v-if="controls" class="top-overlay" @click.stop>
       <UButton variant="ghost" color="neutral" class="icon-button" @click="close" aria-label="목록으로 돌아가기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6" /></svg></UButton>
-      <div class="book-heading"><span>{{ mixed ? 'REDDIT' : toon ? toon.seriesTitle : ehentaiToken ? 'E-HENTAI' : book.remote ? 'ONLINE READER' : 'MY LIBRARY' }}</span><h2>{{ currentMedia?.title || book.title }}</h2></div>
+      <div class="book-heading"><span>{{ mixed ? 'REDDIT' : toon ? toon.seriesTitle : ehentaiToken ? 'E-HENTAI' : book.remote ? 'ONLINE READER' : 'MY LIBRARY' }}</span><UBadge v-if="currentMedia?.badge" class="ml-2" size="xs" :color="currentMedia.badge === 'new' ? 'primary' : 'neutral'" variant="soft">{{ currentMedia.badge === 'new' ? 'NEW' : '✓ 봄' }}</UBadge><h2>{{ currentMedia?.title || book.title }}</h2></div>
       <div class="top-actions"><UButton variant="ghost" color="neutral" class="icon-button" @click="emit('detail', page)" aria-label="작품 상세 보기" title="작품 상세 보기"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button" @click="toggleSettings" aria-label="뷰어 설정" :aria-expanded="settings"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M9 4v6m6 4v6" /></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button hide-button" @click="controls = false; settings = false" aria-label="메뉴 숨기기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg></UButton></div>
     </header></Transition>
 
