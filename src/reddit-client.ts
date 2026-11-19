@@ -1,0 +1,27 @@
+import { ref } from 'vue'
+export type RedditConfig = { enabled: boolean; subreddit: string; subreddits: string[]; all_media: boolean; show_titles: boolean }
+export type RedditSubscribers = { count: number | null; updated_at: number | null; attempted_at: number | null }
+export type RedditStatus = { config: RedditConfig; installed: boolean; version: string; cookies: boolean; busy: boolean; installing: boolean; stopping: boolean; message: string; exhausted: boolean; subscribers?: Record<string, RedditSubscribers>; subscribers_refreshing?: boolean; subscribers_message?: string }
+export type RedditItem = { id: string; title: string; kind: 'image' | 'gif' | 'video'; created: number; downloaded_at?: number | null; sequence?: number; subreddit: string }
+export const redditStatus = ref<RedditStatus>()
+export async function redditRequest(path: string, init?: RequestInit) {
+  const response = await fetch(`/api/reddit/${path}`, init)
+  if (!response.ok) throw new Error(await response.text())
+  return response
+}
+export async function loadReddit() { redditStatus.value = await (await redditRequest('status')).json() }
+export async function refreshRedditSubscribers(force = false) {
+  await redditRequest('subscribers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force }) })
+  await loadReddit()
+}
+export function subscriberLabel(name: string) {
+  const info = redditStatus.value?.subscribers?.[name.toLowerCase()]
+  if (info?.count != null) return `구독자 ${new Intl.NumberFormat('ko-KR', { notation: info.count >= 10000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(info.count)}명`
+  if (redditStatus.value?.subscribers_refreshing) return '구독자 수 확인 중'
+  return info?.attempted_at ? '구독자 수 확인 불가' : '구독자 수 확인 전'
+}
+export function subscriberDescription(name: string) {
+  const info = redditStatus.value?.subscribers?.[name.toLowerCase()]
+  if (!info?.updated_at) return '구독자 수는 최초 등록 또는 누락 시 조회하고, 이후 선택할 때 1주일이 지났으면 갱신합니다.'
+  return `갱신: ${new Date(info.updated_at * 1000).toLocaleString('ko-KR')}${info.attempted_at && info.attempted_at > info.updated_at ? ' · 최근 조회 실패, 저장된 값 표시' : ''}`
+}

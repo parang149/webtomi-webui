@@ -5,6 +5,7 @@ import CompareSelect from "./OptionSelect"
 import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 import App from './App.vue'
 import SettingsPane from './SettingsPane.vue'
+import RedditSettings from './RedditSettings.vue'
 import { notify } from './notifications'
 import LibraryApiSettings from './LibraryApiSettings.vue'
 import { startOrganize } from './organize-job'
@@ -34,7 +35,7 @@ const settingsTitle = ref<HTMLHeadingElement>()
 const settingsButton = ref<HTMLButtonElement>()
 let appScroll = 0
 const currentPassword=ref(''), newPassword=ref(''), confirmPassword=ref('')
-const settingsTabs = [{ key: 'security', label: '접속·보안' }, { key: 'network', label: '네트워크' }, { key: 'api', label: 'API' }, { key: 'download', label: '다운로드' }, { key: 'library', label: '라이브러리' }, { key: 'logs', label: '로그' }, { key: 'cache', label: '온라인 읽기' }, { key: 'search', label: '검색' }, { key: 'debug', label: '디버그' }, { key: 'about', label: '정보' }] as const
+const settingsTabs = [{ key: 'security', label: '접속·보안' }, { key: 'network', label: '네트워크' }, { key: 'reddit', label: 'Reddit' }, { key: 'api', label: 'API' }, { key: 'download', label: '다운로드' }, { key: 'library', label: '라이브러리' }, { key: 'logs', label: '로그' }, { key: 'cache', label: '온라인 읽기' }, { key: 'search', label: '검색' }, { key: 'debug', label: '디버그' }, { key: 'about', label: '정보' }] as const
 const section = ref<typeof settingsTabs[number]['key']>('security')
 let loading=false
 function expired() { authenticated.value=false; setCsrf(null); currentPassword.value='';newPassword.value='';confirmPassword.value=''; }
@@ -181,7 +182,8 @@ onUnmounted(()=>{window.removeEventListener('popstate',syncScreen);window.remove
         <UTabs orientation="vertical" class="settings-tabs" :ui="{ list: 'w-full max-sm:grid max-sm:grid-cols-2', indicator: 'max-sm:hidden', trigger: 'max-sm:justify-center max-sm:data-[state=active]:bg-primary max-sm:data-[state=active]:text-inverted' }" aria-label="설정 항목" :content="false" :items="settingsTabs.map(tab => ({ label: tab.label, value: tab.key }))" :model-value="section" @update:model-value="value => { const tab = settingsTabs.find(tab => tab.key === value); if (tab) section = tab.key }" />
         <div :key="section" class="settings-content" role="region" aria-labelledby="settings-section-title">
           <h2 id="settings-section-title">{{ settingsTabs.find(tab => tab.key === section)?.label }}</h2>
-          <WebuiAbout v-if="section === 'about'" />
+          <RedditSettings v-if="section === 'reddit'" />
+          <WebuiAbout v-else-if="section === 'about'" />
           <div v-else-if="section === 'search'" class="search-preferences">
             <label>상세 조건 카드
               <CompareSelect v-model="filterLayout">

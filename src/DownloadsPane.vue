@@ -6,7 +6,7 @@ import { CollapsibleRoot, CollapsibleTrigger, CollapsibleContent } from 'reka-ui
 import SourceTabs from './SourceTabs.vue'
 
 const props = defineProps<{ localCovers: ReadonlyMap<string, string> }>()
-const emit = defineEmits<{ libraryChanged: [] }>()
+const emit = defineEmits<{ libraryChanged: []; read: [Job] }>()
 type Job = { id: number; source?: 'hitomi' | 'ehentai' | 'toon' | 'wolf'; token?: string; toon_series?: number; series_title?: string; title: string; status: string; downloaded: number; total: number; error: string | null; artists?: string[]; thumb?: string | null; started_at?: number | null; completed_at?: number | null; retry_at?: number | null }
 const detailed = ref(false)
 const expanded = ref(new Set<string>())
@@ -191,7 +191,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer) })
               </dl>
               <UProgress v-if="job.total > 0 || job.status === 'downloading'" class="job-progress" :class="{ 'is-downloading': job.status === 'downloading', 'is-indeterminate': !job.total }" :model-value="job.total ? Math.min(100, job.downloaded / job.total * 100) : 0" :aria-label="`${job.title} 다운로드 진행률`"></UProgress>
               <p v-if="job.error" role="status">{{ job.error }}</p>
-              <div class="actions"><UButton type="button" v-if="['queued','downloading'].includes(job.status)" :disabled="pending" @click="action(job, 'pause')">일시정지</UButton><UButton type="button" v-if="['queued','downloading','paused','interrupted','failed'].includes(job.status)" :disabled="pending" @click="action(job, 'cancel')">취소</UButton><UButton type="button" v-if="['paused','cancelled','failed','interrupted'].includes(job.status)" :disabled="pending" @click="action(job)">{{ job.status === 'failed' ? '다시 시도' : '재개 / 이어받기' }}</UButton></div>
+              <div class="actions"><UButton type="button" v-if="job.status === 'completed' && localCovers.has(jobKey(job))" icon="i-lucide-book-open" @click="emit('read', job)">읽기</UButton><UButton type="button" v-if="['queued','downloading'].includes(job.status)" :disabled="pending" @click="action(job, 'pause')">일시정지</UButton><UButton type="button" v-if="['queued','downloading','paused','interrupted','failed'].includes(job.status)" :disabled="pending" @click="action(job, 'cancel')">취소</UButton><UButton type="button" v-if="['paused','cancelled','failed','interrupted'].includes(job.status)" :disabled="pending" @click="action(job)">{{ job.status === 'failed' ? '다시 시도' : '재개 / 이어받기' }}</UButton></div>
             </div>
         </CollapsibleContent>
       </CollapsibleRoot>

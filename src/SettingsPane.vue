@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppSelect from './AppSelect.vue'
 import CompareSelect from "./OptionSelect"
 import { trackLibraryTask } from './organize-job'
 import { computed, onMounted, ref } from 'vue'
@@ -46,7 +47,7 @@ async function importLibrary(event: Event) {
   }
 }
 type CacheSettings = { prefetch: boolean; prefetch_pages: number; retention_hours: number; cache_mb: number }
-type Preferences = CacheSettings & { cover_cache_mb: number;
+type Preferences = CacheSettings & { cover_cache_mb: number; server_offset?: number | null;
   library_path: string
   ehentai_path: string
   toon_path: string
@@ -61,7 +62,7 @@ type Preferences = CacheSettings & { cover_cache_mb: number;
   ehentai_cache: CacheSettings
   comics_cache: CacheSettings
 }
-type Settings = { preferences: Preferences; library_root: string; default_hitomi_library: string; data_root: string; active_library: string; active_ehentai_library: string; active_toon_library: string; active_wolf_library: string; active_cache_parent: string; library_path_error: string | null; ehentai_path_error: string | null; cache_bytes: number; ehentai_cache_bytes: number; comics_cache_bytes: number; cover_cache_bytes: number }
+type Settings = { preferences: Preferences; library_root: string; default_hitomi_library: string; data_root: string; active_library: string; active_ehentai_library: string; active_toon_library: string; active_wolf_library: string; active_cache_parent: string; library_path_error: string | null; ehentai_path_error: string | null; cache_bytes: number; ehentai_cache_bytes: number; comics_cache_bytes: number; cover_cache_bytes: number; server_time?: string; server_offset_label?: string }
 type Folders = { path: string; parent: string | null; absolute: string; children: string[] }
 const folderTargets = [
   { key: 'library_path', label: 'Hitomi 다운로드', active: 'active_library', error: 'library_path_error' },
@@ -113,6 +114,19 @@ async function run(task: () => Promise<void>) {
   try { await task() }
   catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
   finally { busy.value = false }
+}
+const offsetOptions = [{ value: 'auto', label: '자동 (서버 시스템 시간대)' }, ...[-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1,0,1,2,3,4,5,5.5,6,7,8,9,9.5,10,11,12,13,14].map(hours => {
+  const minutes = Math.round(hours * 60), abs = Math.abs(minutes)
+  return { value: String(minutes), label: `UTC${minutes < 0 ? '-' : '+'}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}${minutes === 540 ? ' (한국)' : ''}` }
+})]
+/** XML 시간대 is saved on change, apart from the download form. */
+function saveOffset(value: string) {
+  void run(async () => {
+    const response = await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ section: 'time', server_offset: value === 'auto' ? null : Number(value) }) })
+    if (!response.ok) throw new Error(response.status === 400 ? await response.text() : '설정을 저장하지 못했습니다.')
+    settings.value = await response.json()
+    message.value = '시간대를 저장했습니다.'
+  })
 }
 function save() {
   void run(async () => {
@@ -206,6 +220,8 @@ onMounted(() => run(load))
       <label>Hitomi 파일명 규칙<UInput v-model="settings.preferences.name_template" maxlength="512" required /></label>
       <label>E-Hentai 파일명 규칙<UInput v-model="settings.preferences.ehentai_name_template" maxlength="512" required /></label>
       <label class="checkbox"><USwitch v-model="settings.preferences.organize_new_hitomi" />새 Hitomi 다운로드를 ID 구간별로 저장</label>
+      <label>XML 시간대<AppSelect :model-value="settings.preferences.server_offset == null ? 'auto' : String(settings.preferences.server_offset)" label="XML 시간대" :options="offsetOptions" @update:model-value="saveOffset" /></label>
+      <p class="auth-help">ComicInfo.xml의 업로드 날짜와 메모(받은·갱신 시각)를 이 시간대로 적습니다. 현재 서버 시각 {{ settings.server_time }} ({{ settings.server_offset_label }})</p>
       <p class="auth-help"><code>{artists} {title} {id} {language} {language_localname} {type_field}</code>를 사용할 수 있습니다. <code>/</code>로 하위 폴더를 나누고 마지막 부분에 <code>{id}</code>를 넣으세요.</p>
     </template>
     <template v-else-if="section === 'library'">

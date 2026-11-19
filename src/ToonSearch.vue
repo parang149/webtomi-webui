@@ -176,7 +176,7 @@ async function download(list: ToonEpisode[]) {
     for (let start = 0; start < list.length; start += 50) {
       const response = await fetch(`/api/${props.site}/downloads`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ series: series.id, series_title: series.title, artists: series.artists, genres: series.genres, count: series.episodes.length, episodes: list.slice(start, start + 50).map(({ id, title }) => ({ id, title, number: props.site === 'wolf' ? id % 1_000_000 : series.episodes.findIndex(e => e.id === id) + 1 })) }),
+        body: JSON.stringify({ series: series.id, series_title: series.title, artists: series.artists, genres: series.genres, count: series.episodes.length, episodes: list.slice(start, start + 50).map(({ id, title, date }) => ({ id, title, date, number: props.site === 'wolf' ? id % 1_000_000 : series.episodes.findIndex(e => e.id === id) + 1 })) }),
       })
       if (!response.ok) throw new Error(response.status === 429 ? '다운로드 대기열이 가득 찼습니다. 진행 중인 작업이 끝난 뒤 다시 받으세요.' : '다운로드 작업을 등록하지 못했습니다.')
       const jobs: { id: number; status: string }[] = await response.json()

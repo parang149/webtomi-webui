@@ -2,9 +2,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import ScrollPage from './ScrollPage.vue'
 import { refreshReading, markReading, pendingProgress, resetReading, type EhentaiDetails } from './reading-history'
-const props = defineProps<{ book: { id: string; title: string; pages: number; remote?: boolean; ehentaiToken?: string; ehentaiDetails?: EhentaiDetails; toon?: { site?: 'toon' | 'wolf'; series: number; seriesTitle: string; episodes: { id: number; title: string }[]; local?: boolean }; metadata?: { toon_episode?: number } }; detailError?: string; backPrompt?: number }>()
-const emit = defineEmits<{ close: []; detail: []; episode: [number] }>()
-const page = ref(0)
+const props = defineProps<{ book: { id: string; title: string; pages: number; initialPage?: number; media?: { url: string; kind: 'image' | 'gif' | 'video'; title: string }[]; remote?: boolean; ehentaiToken?: string; ehentaiDetails?: EhentaiDetails; toon?: { site?: 'toon' | 'wolf'; series: number; seriesTitle: string; episodes: { id: number; title: string }[]; local?: boolean }; metadata?: { toon_episode?: number } }; detailError?: string; backPrompt?: number; detailOpen?: boolean }>()
+const emit = defineEmits<{ close: []; detail: [page?: number]; episode: [number] }>()
+const page = ref(props.book.initialPage ?? 0)
+const mixed = !!props.book.media
+const currentMedia = computed(() => props.book.media?.[page.value])
+const mixedVideo = ref<HTMLVideoElement>()
+watch(() => props.detailOpen, open => { if (open) mixedVideo.value?.pause() })
 const mode = ref<'page' | 'scroll'>('page')
 const direction = ref<'ltr' | 'rtl' | 'ttb'>('ltr')
 const swipe = ref(true)
@@ -112,7 +116,7 @@ const toonEpisode = toon?.local ? props.book.metadata?.toon_episode : Number(pro
 const toonIndex = toon ? toon.episodes.findIndex(item => item.id === toonEpisode) : -1
 const nextEpisode = toon && toonIndex >= 0 ? toon.episodes[toonIndex + 1] : undefined
 const previousEpisode = toon && toonIndex > 0 ? toon.episodes[toonIndex - 1] : undefined
-const imageUrl = (index: number) => `${baseUrl}/pages/${index}`
+const imageUrl = (index: number) => props.book.media?.[index]?.url ?? `${baseUrl}/pages/${index}`
 const storageKey = toonOnline ? `reader:${comicSite}:${props.book.id}` : ehentaiToken
   ? `reader:ehentai:${props.book.id}:${ehentaiToken}`
   : `reader:${props.book.remote ? 'remote:' : ''}${props.book.id}`
@@ -125,7 +129,7 @@ let disposed = false
 let positioning = false
 function clamp(value: number) { return Number.isFinite(value) ? Math.max(0, Math.min(props.book.pages - 1, Math.floor(value))) : 0 }
 function save() {
-  if (!ready.value || suppressSave) return
+  if (!ready.value || suppressSave || mixed) return
   const data = { page: page.value, mode: mode.value }
   const position = `${data.page}:${data.mode}`
   if (savedPosition === position) return
@@ -176,7 +180,7 @@ function move(delta: number, repeat = false) {
 function jump(event: Event) { page.value = clamp(Number((event.target as HTMLInputElement).value) - 1); locate() }
 function close() { clearTimeout(hideTimer); clearTimeout(timer); save(); emit('close') }
 function keydown(event: KeyboardEvent) {
-  if (endPrompt.value?.open || document.querySelector('dialog[open]')) return
+  if (props.detailOpen || endPrompt.value?.open || document.querySelector('dialog[open]')) return
   if (event.key === 'Escape') { if (settings.value) settings.value = false; else if (controls.value) controls.value = false; else showControls(); return }
   if (event.target instanceof HTMLElement && (['INPUT','SELECT','TEXTAREA'].includes(event.target.tagName) || event.target.isContentEditable)) return
   if (event.key === ' ') { if (event.target instanceof HTMLElement && event.target.closest('button')) return; event.preventDefault(); toggleControls(); return }
@@ -256,7 +260,7 @@ watch([fit, zoom], async () => {
 })
 watch(page, () => {
   if (mode.value === 'page' && viewport.value) { viewport.value.scrollTop = 0; viewport.value.scrollLeft = 0 }
-  if (!online && ready.value && mode.value === 'page' && page.value + 1 < props.book.pages) { const image = new Image(); image.src = imageUrl(page.value + 1) }
+  if (!mixed && !online && ready.value && mode.value === 'page' && page.value + 1 < props.book.pages) { const image = new Image(); image.src = imageUrl(page.value + 1) }
 })
 watch([page, ready], ([index, loaded], _, cleanup) => {
   if (!loaded || !online || index + 1 >= props.book.pages) return
@@ -286,10 +290,11 @@ onMounted(async () => {
   } catch { /* Optional preference. */ }
   let fallback = { page: 0, mode: toon ? (localStorage.getItem('reader:toon-mode') === 'page' ? 'page' : 'scroll') : 'page' }
   try {
-    const saved = localStorage.getItem(storageKey)
+    const saved = mixed ? null : localStorage.getItem(storageKey)
     if (saved) fallback = ehentaiToken || toonOnline ? JSON.parse(saved) ?? fallback : { ...fallback, page: Number(saved) }
   } catch { /* Optional browser storage. */ }
   try {
+    if (mixed) throw new Error('local gallery')
     await pendingProgress.get(progressUrl)
     if (disposed) return
     const response = await fetch(progressUrl)
@@ -300,9 +305,9 @@ onMounted(async () => {
     mode.value = position.mode === 'scroll' ? 'scroll' : 'page'
     status.value = '읽던 위치 불러옴'
   } catch {
-    page.value = clamp(fallback.page)
-    mode.value = fallback.mode === 'scroll' ? 'scroll' : 'page'
-    status.value = '이 기기의 읽던 위치 사용 중'
+    page.value = clamp(mixed ? props.book.initialPage ?? 0 : fallback.page)
+    mode.value = !mixed && fallback.mode === 'scroll' ? 'scroll' : 'page'
+    status.value = mixed ? 'Reddit · 저장된 미디어' : '이 기기의 읽던 위치 사용 중'
   }
   if (disposed) return
   ready.value = true; save(); await locate()
@@ -320,6 +325,7 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
       <div v-if="!ready" class="empty-state"><span class="loader" />읽던 위치를 불러오는 중</div>
       <template v-else-if="mode === 'page'">
         <div v-if="broken" class="empty-state" @click.stop>이미지를 불러오지 못했습니다.<UButton variant="outline" color="neutral" @click="broken = false">다시 불러오기</UButton></div>
+        <video ref="mixedVideo" v-else-if="currentMedia?.kind === 'video'" :key="page" :src="imageUrl(page)" class="mixed-video" controls playsinline preload="metadata" @click.stop @loadedmetadata="pageLoading = false" @error="broken = true; pageLoading = false" />
         <div v-else class="page-stage" :style="{ width: `${Math.max(frame.width, imageWidth)}px` }"><img class="page-image" :style="{ width: `${imageWidth}px` }" :src="imageUrl(page)" :alt="`${page + 1}페이지`" draggable="false" @load="measured" @error="broken = true; pageLoading = false"></div>
       </template>
       <div v-else class="scroll-pages" :class="`scroll-${fit}`" :style="{ width: scrollWidth }"><ScrollPage v-for="index in book.pages" :key="index" :index="index - 1" :src="imageUrl(index - 1)" :fit="fit" :max-height="frame.height" :available-width="frame.width" :zoom="zoom" @visible="visible" /><div v-if="nextEpisode" class="episode-end"><UButton size="xl" icon="i-lucide-chevron-right" @click.stop="flush(); emit('episode', 1)">다음 회차 · {{ nextEpisode.title }}</UButton></div></div>
@@ -327,18 +333,18 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
 
     <Transition name="chrome"><header v-if="controls" class="top-overlay" @click.stop>
       <UButton variant="ghost" color="neutral" class="icon-button" @click="close" aria-label="목록으로 돌아가기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6" /></svg></UButton>
-      <div class="book-heading"><span>{{ toon ? toon.seriesTitle : ehentaiToken ? 'E-HENTAI' : book.remote ? 'ONLINE READER' : 'MY LIBRARY' }}</span><h2>{{ book.title }}</h2></div>
-      <div class="top-actions"><UButton variant="ghost" color="neutral" class="icon-button" @click="emit('detail')" aria-label="작품 상세 보기" title="작품 상세 보기"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button" @click="toggleSettings" aria-label="뷰어 설정" :aria-expanded="settings"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M9 4v6m6 4v6" /></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button hide-button" @click="controls = false; settings = false" aria-label="메뉴 숨기기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg></UButton></div>
+      <div class="book-heading"><span>{{ mixed ? 'REDDIT' : toon ? toon.seriesTitle : ehentaiToken ? 'E-HENTAI' : book.remote ? 'ONLINE READER' : 'MY LIBRARY' }}</span><h2>{{ currentMedia?.title || book.title }}</h2></div>
+      <div class="top-actions"><UButton variant="ghost" color="neutral" class="icon-button" @click="emit('detail', page)" aria-label="작품 상세 보기" title="작품 상세 보기"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button" @click="toggleSettings" aria-label="뷰어 설정" :aria-expanded="settings"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M9 4v6m6 4v6" /></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button hide-button" @click="controls = false; settings = false" aria-label="메뉴 숨기기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg></UButton></div>
     </header></Transition>
 
     <Transition name="panel"><aside v-if="controls && settings" class="settings-panel" aria-label="뷰어 설정 패널" @click.stop>
       <div class="panel-title"><h3>읽기 설정</h3><UButton variant="ghost" color="neutral" icon="i-lucide-x" square @click="settings = false" aria-label="설정 닫기" /></div>
       <fieldset><legend>이미지 맞춤</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '화면 맞춤', value: 'screen' }, { label: '폭 맞춤', value: 'width' }, { label: '원본 크기', value: 'original' }]" :model-value="fit" @update:model-value="value => setFit(value as 'width' | 'screen' | 'original')" /></fieldset>
-      <fieldset><legend>읽기 방식</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '페이지 넘김', value: 'page' }, { label: '세로 스크롤', value: 'scroll' }]" :model-value="mode" @update:model-value="value => mode = value as 'page' | 'scroll'" /></fieldset>
+      <fieldset v-if="!mixed"><legend>읽기 방식</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '페이지 넘김', value: 'page' }, { label: '세로 스크롤', value: 'scroll' }]" :model-value="mode" @update:model-value="value => mode = value as 'page' | 'scroll'" /></fieldset>
       <fieldset><legend>읽기 방향</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '오른쪽', icon: 'i-lucide-arrow-right', value: 'ltr' }, { label: '왼쪽', icon: 'i-lucide-arrow-left', value: 'rtl' }, { label: '세로', icon: 'i-lucide-arrow-down', value: 'ttb' }]" :model-value="direction" @update:model-value="value => direction = value as 'ltr' | 'rtl' | 'ttb'" /></fieldset>
       <div v-if="toon" class="read-actions episode-actions"><UButton variant="ghost" color="neutral" size="sm" block icon="i-lucide-chevron-left" :disabled="!previousEpisode" @click="flush(); emit('episode', -1)">이전 회차</UButton><UButton variant="ghost" color="neutral" size="sm" block trailing-icon="i-lucide-chevron-right" :disabled="!nextEpisode" @click="flush(); emit('episode', 1)">다음 회차</UButton></div><div class="zoom-row"><span>스와이프로 넘기기</span><USwitch v-model="swipe" aria-label="스와이프로 페이지 넘기기" /></div>
       <div class="zoom-row"><span>확대 (%)</span><UInputNumber v-model="zoom" variant="soft" :min="50" :max="300" :step="25" size="sm" class="w-32" aria-label="확대 비율" /></div>
-      <div class="read-actions"><UButton variant="ghost" color="neutral" size="sm" block v-if="!ehentaiToken" @click="setRead(true)">읽음으로 표시</UButton><UButton variant="ghost" color="neutral" size="sm" block @click="setRead(false)">안 읽음으로 변경</UButton></div><p class="sync-status" role="status">{{ status }}</p><p class="keyboard-hint">← → 페이지 이동 · Space 메뉴</p>
+      <div v-if="!mixed" class="read-actions"><UButton variant="ghost" color="neutral" size="sm" block v-if="!ehentaiToken" @click="setRead(true)">읽음으로 표시</UButton><UButton variant="ghost" color="neutral" size="sm" block @click="setRead(false)">안 읽음으로 변경</UButton></div><p class="sync-status" role="status">{{ status }}</p><p class="keyboard-hint">← → 페이지 이동 · Space 메뉴</p>
     </aside></Transition>
 
     <Transition name="chrome"><footer v-if="controls" class="bottom-overlay" @click.stop>
@@ -381,4 +387,8 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
 .page-range{position:absolute;height:100%;border-radius:inherit;background:var(--accent)}
 .page-thumb{display:block;width:18px;height:18px;border-radius:50%;background:var(--accent)}
 .page-thumb:focus-visible{outline:2px solid white;outline-offset:3px}
+</style>
+
+<style scoped>
+.mixed-video{max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain}
 </style>

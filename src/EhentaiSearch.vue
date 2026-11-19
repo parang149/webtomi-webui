@@ -9,6 +9,7 @@ export type EhentaiGallery = {
   pages: number | null
   rating: number | null
   tags: string[]
+  uploader?: string | null
 }
 </script>
 
@@ -303,12 +304,11 @@ async function search(cursor?: number, previous = false) {
         <template #body><div class="gallery-detail">
           <template v-if="displayedDetail">
         
-        <GalleryDetail :refreshable="infoCacheMode === 'week'" :refreshing="refreshing" @refresh="refreshDetail" :title="displayedDetail.title" :cover="localCovers?.get(`ehentai:${displayedDetail.id}`) ?? (displayedDetail.thumb ? ehentaiCover(displayedDetail.thumb) : '')" :kind="displayedDetail.category" :info="(detailMetadata.language || '언어 정보 없음') + (displayedDetail.pages ? ` · ${displayedDetail.pages}페이지` : '')" :rating="displayedDetail.rating" :id="displayedDetail.id" :fields="detailMetadata.fields.map(f => ({ name: f.label, values: f.values }))" :tags="detailMetadata.tags" :date="displayedDetail.posted ? `업로드 ${displayedDetail.posted}` : ''">
+        <GalleryDetail :refreshable="infoCacheMode === 'week'" :refreshing="refreshing" @refresh="refreshDetail" :title="displayedDetail.title" :cover="localCovers?.get(`ehentai:${displayedDetail.id}`) ?? (displayedDetail.thumb ? ehentaiCover(displayedDetail.thumb) : '')" :kind="displayedDetail.category" :info="(detailMetadata.language || '언어 정보 없음') + (displayedDetail.pages ? ` · ${displayedDetail.pages}페이지` : '')" :rating="displayedDetail.rating" :id="displayedDetail.id" :fields="detailMetadata.fields.map(f => ({ name: f.label, values: f.values }))" :tags="detailMetadata.tags" :uploader="displayedDetail.uploader" :external-url="displayedDetail.url" external-label="E-Hentai에서 열기" :date="displayedDetail.posted ? `업로드 ${displayedDetail.posted}` : ''">
           <template #actions>
           <UButton v-if="!readerDetail" class="read-button" :disabled="opening" @click="openReader(displayedDetail)">{{ opening ? '여는 중…' : readLabel(displayedDetail) }}</UButton>
           <UButton variant="outline" color="neutral" :disabled="submittingDownload !== undefined || isDownloaded(displayedDetail.id) || isDownloading(displayedDetail.id)" @click="download(displayedDetail)">{{ downloadLabel(displayedDetail.id) }}</UButton>
           </template>
-        <a class="original-link" :href="displayedDetail.url" target="_blank" rel="noopener noreferrer">E-Hentai에서 열기 ↗</a>
         <p v-if="readerError" role="alert">{{ readerError }}</p>
         <p v-if="downloadError[displayedDetail.id]" role="alert">{{ downloadError[displayedDetail.id] }}</p>
         </GalleryDetail>
@@ -329,7 +329,6 @@ async function search(cursor?: number, previous = false) {
 .eh-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .rating{color:#f6cd76}
 .detail-category{font-size:12px}
-.original-link{display:flex;align-items:center;width:fit-content;min-height:44px;color:var(--accent)}
 @media(max-width:480px){
   .keyword{flex-basis:100%}
   .eh-form .primary-button{flex-basis:100%}

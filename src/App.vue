@@ -20,6 +20,8 @@ import { loadInfoCacheMode } from './info-cache'
 import { scrollToControls, useIncremental } from './incremental'
 import GalleryDetail from './GalleryDetail.vue'
 import SourceTabs from './SourceTabs.vue'
+import RedditPane from './RedditPane.vue'
+import { loadReddit, redditStatus } from './reddit-client'
 const emit = defineEmits<{ reading: [boolean] }>()
 const props = defineProps<{ libraryRevision: number; workRevision: number }>()
 const menu = [
@@ -27,12 +29,13 @@ const menu = [
   { id: 'ehentai', label: 'E-Hentai', icon: 'M5 4h14v16H5zM9 8h6M9 12h6M9 16h4' },
   { id: 'toon', label: '만화', icon: '' },
   { id: 'downloads', label: '작업', icon: 'M12 3v12m-5-5 5 5 5-5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4' },
+  { id: 'reddit', label: 'Reddit', icon: 'M4 4h16v16H4zM8 14l3-3 3 3 2-2 4 4' },
   { id: 'library', label: '라이브러리', icon: 'M4 4h4v16H4zm5 0h4v16H9zm6 1 4-1 4 15-4 1z' },
   { id: 'history', label: '읽기 기록', icon: 'M3 12a9 9 0 1 0 2-6M3 3v5h5m4-1v5l3 2' },
 ] as const
 
 type ToonBook = { site?: ComicSite; series: number; seriesTitle: string; episodes: { id: number; title: string }[]; local?: boolean }
-type Book = { id: string; title: string; pages: number; remote?: boolean; ehentaiToken?: string; toon?: ToonBook; ehentaiDetails?: EhentaiDetails; readable?: boolean; formats?: string[]; download_sort_at?: number; metadata?: { id?: number; ehentai_id?: number; source?: string; toon_series?: number; toon_episode?: number; series_title?: string; title?: string; type?: string; language?: string; artists?: string[]; groups?: string[]; parodys?: string[]; characters?: string[]; tags?: {tag:string;female?:number;male?:number}[] } }
+type Book = { id: string; title: string; pages: number; remote?: boolean; ehentaiToken?: string; toon?: ToonBook; ehentaiDetails?: EhentaiDetails; readable?: boolean; formats?: string[]; download_sort_at?: number; metadata?: { id?: number; ehentai_id?: number; source?: string; toon_series?: number; toon_episode?: number; series_title?: string; title?: string; type?: string; language?: string; artists?: string[]; groups?: string[]; parodys?: string[]; characters?: string[]; tags?: {tag:string;female?:number;male?:number}[]; uploader?: string; uploaded?: string; downloaded_at?: number; comicinfo_updated_at?: number; ehentai_token?: string } }
 const books = ref<Book[]>([])
 const downloadedIds = computed(() => new Set(books.value.flatMap(book => Number(book.metadata?.id) > 0 ? [Number(book.metadata?.id)] : [])))
 const downloadedEhentaiIds = computed(() => new Set(books.value.flatMap(book => book.metadata?.ehentai_id ? [book.metadata.ehentai_id] : [])))
@@ -49,6 +52,8 @@ type Screen = {
 const newKey = () => Math.random().toString(36).slice(2)
 const screen = shallowRef<Screen>({ key: newKey(), tab: 'search' })
 const tab = computed(() => screen.value.tab)
+const redditReading = ref(false)
+watch(() => redditStatus.value?.config.enabled, enabled => { if (enabled === false && tab.value === 'reddit') changeTab('library') })
 const active = computed(() => screen.value.reader)
 const defaultTitle = document.title
 const selected = computed(() => active.value && !screen.value.readerDetail ? null : screen.value.local ?? null)
@@ -186,6 +191,27 @@ function libraryInfo(book: Book, withFormats: boolean) {
 function downloadDate(book: Book) {
   const value = book.download_sort_at ?? 0
   return value > 0 ? new Date(value < 1e11 ? value * 1000 : value).toLocaleDateString() : ''
+}
+/** Upload, download and XML refresh times shown under the library detail. */
+function detailDates(book: Book) {
+  const m = book.metadata
+  return [m?.uploaded ? `업로드 ${m.uploaded.slice(0, 16)}` : '', downloadDate(book) ? `받은 날짜 ${downloadDate(book)}` : '',
+    m?.comicinfo_updated_at ? `XML 갱신 ${new Date(m.comicinfo_updated_at * 1000).toLocaleString()}` : ''].filter(Boolean).join(' · ')
+}
+const xmlToast = useToast()
+const xmlRefreshing = ref(false)
+async function refreshXml(book: Book) {
+  xmlRefreshing.value = true
+  try {
+    const response = await fetch(`/api/library/${encodeURIComponent(book.id)}/comicinfo`, { method: 'POST' })
+    if (!response.ok) throw new Error(await response.text() || 'XML을 다시 쓰지 못했습니다.')
+    const metadata = await response.json()
+    detailBook.value = { ...book, metadata: { ...book.metadata, ...metadata } }
+    xmlToast.add({ title: 'XML을 갱신했습니다.', color: 'success', icon: 'i-lucide-circle-check' })
+    void refresh()
+  } catch (error) {
+    xmlToast.add({ title: error instanceof Error ? error.message : 'XML을 다시 쓰지 못했습니다.', color: 'error', icon: 'i-lucide-circle-alert' })
+  } finally { xmlRefreshing.value = false }
 }
 watch(sort, value => { sortDirection.value = value === 'recent' || value === 'download' ? 'desc' : 'asc' })
 const visible = computed(() => {
@@ -373,6 +399,7 @@ onMounted(() => {
   window.addEventListener('popstate', restoreScreen)
   void refresh()
   void loadInfoCacheMode()
+  void loadReddit().catch(() => {})
 })
 onUnmounted(() => {
   libraryEvents?.close()
@@ -385,9 +412,9 @@ onUnmounted(() => {
 <template>
   <main class="app-workspace">
     <div v-show="!active">
-      <nav class="main-nav" aria-label="주 메뉴">
-        <ul class="main-nav-list">
-        <li v-for="item in menu.filter(item => item.id !== 'ehentai' && item.id !== 'toon')" :key="item.id">
+      <nav v-show="!redditReading" class="main-nav" aria-label="주 메뉴">
+        <ul class="main-nav-list" :style="{ gridTemplateColumns: `repeat(${redditStatus?.config.enabled ? 5 : 4}, minmax(0, 1fr))` }">
+        <li v-for="item in menu.filter(item => item.id !== 'ehentai' && item.id !== 'toon' && (item.id !== 'reddit' || redditStatus?.config.enabled))" :key="item.id">
           <UButton type="button" size="sm" class="sm:h-12 sm:text-base sm:font-semibold" :variant="(tab === item.id || item.id === 'search' && (tab === 'ehentai' || tab === 'toon')) ? 'soft' : 'ghost'" :color="(tab === item.id || item.id === 'search' && (tab === 'ehentai' || tab === 'toon')) ? 'primary' : 'neutral'" :aria-current="(tab === item.id || item.id === 'search' && (tab === 'ehentai' || tab === 'toon')) ? 'page' : undefined" @click="changeTab(item.id)">
           <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="item.icon"/></svg>
           {{ item.label }}
@@ -396,6 +423,7 @@ onUnmounted(() => {
         </ul>
       </nav>
       <EqualTabs v-if="tab === 'search' || tab === 'ehentai' || tab === 'toon'" class="search-tabs" label="검색 출처" :model-value="tab" :items="[{ label: 'Hitomi', value: 'search', avatar: { src: '/hitomi-favicon.png', size: '3xs' } }, { label: 'E-Hentai', value: 'ehentai', avatar: { src: '/ehentai-favicon.png', size: '3xs' } }, { label: '만화', value: 'toon', icon: 'i-lucide-book-open' }]" @update:model-value="value => { if (value === 'search' || value === 'ehentai' || value === 'toon') changeTab(value) }" />
+      <RedditPane v-if="tab === 'reddit' && redditStatus?.config.enabled" @reading="value => { redditReading = value; emit('reading', value) }" />
       <Transition name="tab-fade">
         <RemoteSearch v-show="tab === 'search'" :downloaded-ids="downloadedIds" :detail-item="remoteDetail" :reader-detail="screen.readerDetail" @detail="showRemoteDetail" @close-detail="goBack" @library-changed="refresh()" :local-covers="localDownloadCovers" @read="item => openLocal(`hitomi:${item.id}`) || open({ id: String(item.id), title: item.title, pages: item.pages, remote: true })" />
       </Transition>
@@ -416,7 +444,7 @@ onUnmounted(() => {
       <section v-if="tab === 'downloads'">
         <EqualTabs class="work-type-tabs" label="작업 종류" :model-value="workTab" :items="[{ label: '다운로드', value: 'downloads' }, { label: '작업', value: 'library' }]" @update:model-value="value => { if (value === 'downloads' || value === 'library') workTab = value }" />
         <Transition name="tab-fade">
-          <DownloadsPane v-if="workTab === 'downloads'" :local-covers="localDownloadCovers" @library-changed="refresh()" />
+          <DownloadsPane v-if="workTab === 'downloads'" :local-covers="localDownloadCovers" @library-changed="refresh()" @read="job => job.source === 'toon' || job.source === 'wolf' ? openToonHistory(job.source, job.toon_series!, job.id, job.title) : openLocal(`${job.source || 'hitomi'}:${job.id}`)" />
           <div v-else><LibraryJobsPane /></div>
         </Transition>
       </section>
@@ -449,7 +477,7 @@ onUnmounted(() => {
     <UModal title="작품 상세" :open="!!selected" :ui="{ content: 'sm:max-w-3xl' }" @update:open="open => { if (!open) goBack() }">
         <template #body><div class="library-detail">
           <template v-if="detailBook">
-          <GalleryDetail :title="detailBook.title" :cover="detailBook.readable !== false ? imageUrl(detailBook, 0) : ''" :placeholder="detailBook.formats?.join(' / ').toUpperCase()" :kind="detailBook.metadata?.type" :badge="readBadge(detailBook.id,detailBook.pages)" :info="libraryInfo(detailBook, true)" :id="detailBook.metadata?.id || detailBook.metadata?.ehentai_id" :fields="[{name:'작가',values:detailBook.metadata?.artists},{name:'그룹',values:detailBook.metadata?.groups},{name:'시리즈',values:detailBook.metadata?.parodys},{name:'캐릭터',values:detailBook.metadata?.characters}]" :tags="detailBook.metadata?.tags" :date="downloadDate(detailBook) ? `받은 날짜 ${downloadDate(detailBook)}` : ''">
+          <GalleryDetail :title="detailBook.title" :cover="detailBook.readable !== false ? imageUrl(detailBook, 0) : ''" :placeholder="detailBook.formats?.join(' / ').toUpperCase()" :kind="detailBook.metadata?.type" :badge="readBadge(detailBook.id,detailBook.pages)" :info="libraryInfo(detailBook, true)" :id="detailBook.metadata?.id || detailBook.metadata?.ehentai_id" :fields="[{name:'작가',values:detailBook.metadata?.artists},{name:'그룹',values:detailBook.metadata?.groups},{name:'시리즈',values:detailBook.metadata?.parodys},{name:'캐릭터',values:detailBook.metadata?.characters}]" :tags="detailBook.metadata?.tags" :date="detailDates(detailBook)" :uploader="detailBook.metadata?.uploader" :external-url="detailBook.metadata?.source === 'ehentai' && detailBook.metadata.ehentai_id && detailBook.metadata.ehentai_token ? `https://e-hentai.org/g/${detailBook.metadata.ehentai_id}/${detailBook.metadata.ehentai_token}/` : undefined" external-label="E-Hentai에서 열기" :xml-refresh="detailBook.formats?.some(f => ['source','cbz','zip'].includes(f))" :xml-refreshing="xmlRefreshing" @refresh-xml="refreshXml(detailBook)">
             <template v-if="detailBook.readable !== false && !screen.readerDetail" #actions><UButton class="read-button" @click="open(detailBook)">{{ record(detailBook.id) ? '이어 읽기' : '읽기' }}</UButton><UButton variant="outline" color="neutral" @click="mark(detailBook,readState(detailBook.id,detailBook.pages) !== 'read')">{{ readState(detailBook.id,detailBook.pages) === 'read' ? '안 읽음으로 변경' : '읽음으로 표시' }}</UButton></template>
             <p v-if="detailBook.readable === false" class="detail-date">압축/PDF의 브라우저 열람은 아직 지원하지 않습니다.</p>
           </GalleryDetail>
