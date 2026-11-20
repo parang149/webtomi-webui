@@ -7,3 +7,5 @@ Browser front end (WEBUI) for a self-hosted gallery server. Vue 3 + Nuxt UI.
 - `webui.json` in the bundle names the WEBUI version and the server API version it needs.
 
 Licensed under MIT (see `LICENSE`), based on code by lanyeeee.
+
+WEBUI 0.2.4 requires server 0.5.4 (API 2) for Reddit online links, saved-media deletion and independent latest-list refresh. Update the server first.

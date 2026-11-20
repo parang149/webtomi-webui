@@ -148,7 +148,8 @@ function storedOption<T extends string>(key: string, options: readonly T[], fall
   watch(value, next => localStorage.setItem(key, next), { flush: 'sync' })
   return value
 }
-const librarySource = storedOption('library-source', ['all', 'hitomi', 'ehentai', 'toon'], 'all')
+const redditStoredCount = ref(0)
+const librarySource = storedOption('library-source', ['all', 'hitomi', 'ehentai', 'toon', 'reddit'], 'all')
 const isComic = (book: Book) => book.metadata?.source === 'toon' || book.metadata?.source === 'wolf'
 const bookSource = (book: Book) => isComic(book) ? 'toon' : book.metadata?.source === 'ehentai' || book.metadata?.ehentai_id ? 'ehentai' : 'hitomi'
 // Downloaded 일일툰 episodes, grouped by series (oldest episode first).
@@ -452,7 +453,8 @@ onUnmounted(() => {
       <Transition name="tab-fade">
       <section v-show="tab === 'library'">
       <div class="toolbar library-toolbar"><h2>라이브러리<span v-if="busy" role="status" class="library-busy">확인 중…</span></h2><div class="work-tabs"><UButton variant="soft" color="neutral" icon="i-lucide-refresh-cw" @click="refresh(false)" :disabled="busy">전체 스캔</UButton><UButton variant="soft" color="neutral" icon="i-lucide-folder-sync" @click="refresh(true)" :disabled="busy">새 파일·변경 스캔</UButton></div></div>
-      <SourceTabs v-model="librarySource" label="라이브러리 출처" />
+      <SourceTabs v-model="librarySource" label="라이브러리 출처" reddit />
+      <template v-if="librarySource !== 'reddit'">
       <label>라이브러리 검색<UInput v-model="filter" type="search" placeholder="제목·ID·작가·태그로 찾기" />
 </label>
       <div class="library-filters"><label>읽기 상태<AppSelect v-model="readingFilter" label="읽기 상태" :options="[{'value': 'all', 'label': '전체'}, {'value': 'unread', 'label': '안 읽음'}, {'value': 'reading', 'label': '읽는 중'}, {'value': 'read', 'label': '읽음'}]" /></label><label>정렬<AppSelect v-model="sort" label="정렬" :options="[{'value': 'title', 'label': '제목순'}, {'value': 'recent', 'label': '읽은 날짜'}, {'value': 'artist', 'label': '작가순'}, {'value': 'download', 'label': '받은 날짜'}]" /></label><label>방향<AppSelect v-model="sortDirection" label="방향" :options="[{'value': 'asc', 'label': '오름차순'}, {'value': 'desc', 'label': '내림차순'}]" /></label><ViewToggle class="library-view-toggle" v-model="libraryLayout" label="라이브러리 보기 방식" /></div>
@@ -469,8 +471,10 @@ onUnmounted(() => {
         </template>
       </section>
       <div v-if="moreBooks" ref="bookSentinel" class="load-more" aria-hidden="true" />
-      <section v-if="!busy && !error && !books.length" class="empty"><h2>아직 작품이 없습니다</h2><p>서버의 <code>라이브러리/작품명/</code> 폴더에 JPG, PNG, WebP 또는 GIF 이미지를 넣고 전체 스캔을 실행하세요.</p><p>이 경로는 서버 PC 기준입니다. 파일명 순서로 표시됩니다.</p></section>
-      <p v-else-if="!busy && !error && !visible.length" class="empty">선택한 조건에 맞는 작품이 없습니다.</p>
+      <section v-if="!busy && !error && !books.length && !(librarySource === 'all' && redditStoredCount)" class="empty"><h2>아직 작품이 없습니다</h2><p>서버의 <code>라이브러리/작품명/</code> 폴더에 JPG, PNG, WebP 또는 GIF 이미지를 넣고 전체 스캔을 실행하세요.</p><p>이 경로는 서버 PC 기준입니다. 파일명 순서로 표시됩니다.</p></section>
+      <p v-else-if="!busy && !error && !visible.length && !(librarySource === 'all' && redditStoredCount)" class="empty">선택한 조건에 맞는 작품이 없습니다.</p>
+      </template>
+      <RedditPane v-if="tab === 'library' && (librarySource === 'reddit' || librarySource === 'all')" saved-only :search-text="filter" @stored-count="redditStoredCount = $event" @reading="value => { redditReading = value; emit('reading', value) }" />
       </section>
       </Transition>
     </div>

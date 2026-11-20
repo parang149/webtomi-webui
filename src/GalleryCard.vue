@@ -2,6 +2,7 @@
 // Shared result card for Hitomi search, E-Hentai search and the library.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import CopyValue from './CopyValue.vue'
+import StatusCheck from './StatusCheck.vue'
 import { kindColor } from './type-colors'
 import { tagClass, tagDescription, tagKey } from './tag-descriptions'
 import type { GalleryTag, ReadBadge } from './GalleryDetail.vue'
@@ -35,7 +36,7 @@ const gridUi = { root: 'flex flex-col', body: 'flex-1 flex flex-col p-2.5 sm:p-4
     <UButton variant="ghost" color="neutral" class="cover-link" :aria-label="`${title} 상세 보기`" @click="emit('detail')">
       <img v-if="cover && !coverFailed" :src="coverSrc" alt="" loading="lazy" referrerpolicy="no-referrer" @error="coverLoadFailed">
       <span v-else :class="{ 'format-placeholder': placeholder }">{{ placeholder || '표지 없음' }}</span>
-      <span v-if="downloaded" class="download-check" title="다운로드 완료" aria-label="다운로드 완료" role="img">✓</span>
+      <StatusCheck v-if="downloaded" overlay label="다운로드 완료" />
     </UButton>
     <div class="result-body">
       <h3><UButton variant="link" color="neutral" class="title-link p-0 text-base sm:text-lg font-bold text-highlighted" @click="emit('detail')">{{ title }}</UButton></h3>

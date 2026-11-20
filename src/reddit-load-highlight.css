@@ -1,0 +1,2 @@
+/* Temporary batch highlight: remove this import and class binding to remove decoration. */
+.reddit-card.reddit-just-loaded{border-color:var(--ui-primary);outline:2px solid var(--ui-primary);outline-offset:-2px}

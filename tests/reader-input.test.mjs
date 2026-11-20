@@ -6,8 +6,8 @@ const source = await readFile(new URL('../src/Reader.vue', import.meta.url), 'ut
 const start = source.indexOf('function surfaceClick('), end = source.indexOf('function pointerDown(', start)
 const code = ts.transpileModule(source.slice(start,end), {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText
 function setup() {
-  const state = { ready:{value:true}, mode:{value:'page'}, settings:{value:false}, forward:{value:1}, direction:{value:'ltr'}, viewport:{value:{scrollTop:0,clientHeight:800,scrollHeight:800,getBoundingClientRect:()=>({left:0,top:0,width:1000,height:800})}}, moves:[], toggles:0 }
-  const api = new Function('state', `const {ready,mode,settings,forward,direction,viewport}=state; const window={getSelection:()=>''}; const suppressClickUntil=0; function move(n){state.moves.push(n)} function toggleControls(){state.toggles++} ${code}; return {surfaceClick,wheel}`)(state)
+  const state = { isVideo:{value:false}, videoFullscreen:{value:false}, videoActive:{value:false}, ready:{value:true}, mode:{value:'page'}, settings:{value:false}, forward:{value:1}, direction:{value:'ltr'}, viewport:{value:{scrollTop:0,clientHeight:800,scrollHeight:800,getBoundingClientRect:()=>({left:0,top:0,width:1000,height:800})}}, moves:[], toggles:0 }
+  const api = new Function('state', `const {isVideo,videoFullscreen,videoActive,ready,mode,settings,forward,direction,viewport}=state; const window={getSelection:()=>''}; const suppressClickUntil=0; function move(n){state.moves.push(n)} function toggleControls(){state.toggles++} ${code}; return {surfaceClick,wheel}`)(state)
   return {state,...api}
 }
 test('tap zones follow reading direction and center toggles menu',()=>{
@@ -26,12 +26,21 @@ test('vertical direction uses top, middle and bottom tap bands',()=>{
 function touchSetup(view, dir='ttb', fwd=1) {
   const s=source.indexOf('let touch:'), e=source.indexOf('function visible(', s)
   const touchCode=ts.transpileModule(source.slice(s,e),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText
-  const state={moves:[],swipe:{value:true}}
-  const api=new Function('state','view',`const viewport={value:view}, settings={value:false}, mode={value:'page'}, swipe=state.swipe, forward={value:${fwd}}, direction={value:'${dir}'}; const window={innerWidth:400}; let suppressClickUntil=0; function move(n){state.moves.push(n)} function surfaceClick(e){state.taps=(state.taps||0)+1} ${touchCode}; return {touchstart,touchend}`)(state,view)
+  const state={moves:[],swipe:{value:true},isVideo:{value:false}, videoFullscreen:{value:false}, videoActive:{value:false}}
+  const api=new Function('state','view',`const isVideo=state.isVideo, videoFullscreen=state.videoFullscreen, videoActive=state.videoActive, viewport={value:view}, settings={value:false}, mode={value:'page'}, swipe=state.swipe, forward={value:${fwd}}, direction={value:'${dir}'}; const window={innerWidth:400}; let suppressClickUntil=0; function move(n){state.moves.push(n)} function surfaceClick(e){state.taps=(state.taps||0)+1} ${touchCode}; return {touchstart,touchend}`)(state,view)
   const swipe=(x0,y0,x1,y1)=>{api.touchstart({touches:[{clientX:x0,clientY:y0}]});api.touchend({changedTouches:[{clientX:x1,clientY:y1}]})}
   return {...api,state,swipe}
 }
 const page=()=>({scrollTop:0,clientHeight:800,scrollHeight:800,scrollLeft:0,clientWidth:400,scrollWidth:400})
+test('fullscreen video gestures never turn media, toggle app menus or capture native wheel input',()=>{
+  const {state,surfaceClick,wheel}=setup(); state.isVideo.value=true; state.videoFullscreen.value=true
+  for(const clientX of [100,500,900]) surfaceClick({clientX})
+  let prevented=0; wheel({deltaY:100,deltaX:0,deltaMode:0,preventDefault(){prevented++}})
+  assert.deepEqual(state.moves,[]); assert.equal(state.toggles,0); assert.equal(prevented,0)
+  const touch=touchSetup(page()); touch.state.isVideo.value=true; touch.state.videoFullscreen.value=true
+  touch.swipe(300,400,100,400); touch.swipe(200,600,200,300)
+  assert.deepEqual(touch.state.moves,[])
+})
 test('vertical swipe turns pages only from the scroll edge in every direction',()=>{
   for (const dir of ['ttb','ltr','rtl']) {
     const view=page(), {state,swipe}=touchSetup(view,dir,dir==='rtl'?-1:1)
@@ -62,4 +71,16 @@ test('wheel turns once per gesture and preserves scrolling and pinch zoom',()=>{
   state.viewport.value.scrollHeight=1600;wheel(event);assert.equal(state.moves.length,0);assert.equal(prevented,0)
   state.viewport.value.scrollHeight=800;wheel({...event,ctrlKey:true});assert.equal(state.moves.length,0)
   wheel(event);wheel(event);wheel(event);assert.deepEqual(state.moves,[1]);assert.equal(prevented,3)
+})
+
+test('video preview swipes navigate normally outside fullscreen',()=>{
+  const touch=touchSetup(page()); touch.state.isVideo.value=true
+  touch.swipe(300,400,100,400); touch.swipe(200,600,200,300)
+  assert.deepEqual(touch.state.moves,[1,1])
+  touch.state.videoFullscreen.value=true
+  touch.swipe(300,400,100,400); assert.equal(touch.state.moves.length,2)
+  touch.state.videoFullscreen.value=false
+  touch.swipe(100,400,300,400); assert.deepEqual(touch.state.moves,[1,1,-1])
+  touch.state.videoActive.value=true
+  touch.swipe(300,400,100,400); assert.equal(touch.state.moves.length,3)
 })

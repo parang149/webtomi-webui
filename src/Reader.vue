@@ -1,13 +1,31 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import ScrollPage from './ScrollPage.vue'
+import VideoPlayer from './VideoPlayer.vue'
+import StatusCheck from './StatusCheck.vue'
 import { refreshReading, markReading, pendingProgress, resetReading, type EhentaiDetails } from './reading-history'
-const props = defineProps<{ book: { id: string; title: string; pages: number; initialPage?: number; media?: { url: string; kind: 'image' | 'gif' | 'video'; title: string; badge?: 'new' | 'seen' }[]; remote?: boolean; ehentaiToken?: string; ehentaiDetails?: EhentaiDetails; toon?: { site?: 'toon' | 'wolf'; series: number; seriesTitle: string; episodes: { id: number; title: string }[]; local?: boolean }; metadata?: { toon_episode?: number } }; detailError?: string; backPrompt?: number; detailOpen?: boolean }>()
-const emit = defineEmits<{ close: []; detail: [page?: number]; episode: [number]; 'media-shown': [index: number] }>()
+const props = defineProps<{ book: { id: string; title: string; pages: number; initialPage?: number; media?: { url: string; kind: 'image' | 'gif' | 'video'; title: string; badge?: 'new' | 'seen'; stored?: boolean; poster?: string }[]; remote?: boolean; ehentaiToken?: string; ehentaiDetails?: EhentaiDetails; toon?: { site?: 'toon' | 'wolf'; series: number; seriesTitle: string; episodes: { id: number; title: string }[]; local?: boolean }; metadata?: { toon_episode?: number } }; mediaSaving?: boolean; detailError?: string; backPrompt?: number; detailOpen?: boolean }>()
+const emit = defineEmits<{ close: []; detail: [page?: number]; episode: [number]; 'media-shown': [index: number]; keep: [index: number]; 'delete-media': [index: number]; 'video-exit': [] }>()
 const page = ref(props.book.initialPage ?? 0)
 const mixed = !!props.book.media
 const currentMedia = computed(() => props.book.media?.[page.value])
-const mixedVideo = ref<HTMLVideoElement>()
+const isVideo = computed(() => currentMedia.value?.kind === 'video')
+const mixedVideo = ref<InstanceType<typeof VideoPlayer>>()
+async function playVideoFullscreen() {
+  if (!isVideo.value) return
+  ready.value = true
+  await nextTick()
+  await mixedVideo.value?.start(true)
+}
+function afterMediaDeleted(index: number) {
+  if (page.value !== index) return
+  if (index + 1 < props.book.pages) page.value = index + 1
+  else close()
+}
+defineExpose({ playVideoFullscreen, afterMediaDeleted })
+const videoPlaying = ref(false)
+const videoFullscreen = ref(false)
+const videoActive = ref(false)
 const displayedMedia = ref('')
 function reportMediaShown() {
   if (!mixed || !displayedMedia.value || props.detailOpen || document.hidden) return
@@ -42,12 +60,29 @@ let oldOverflow = ''
 let suppressClickUntil = 0
 let pointer: { x: number; y: number } | null = null
 let hideTimer: ReturnType<typeof setTimeout> | undefined
-function showControls() { controls.value = true }
+function scheduleVideoMenuHide() {
+  clearTimeout(hideTimer)
+  if (!isVideo.value || !videoPlaying.value || settings.value) return
+  hideTimer = setTimeout(() => { if (!settings.value) controls.value = false }, 2500)
+}
+function showControls() { controls.value = true; scheduleVideoMenuHide() }
+function videoPlayback(playing: boolean) { videoPlaying.value = playing; scheduleVideoMenuHide() }
+function videoActivity(active: boolean) {
+  const previous = videoActive.value
+  videoActive.value = active
+  if (active && !previous) { controls.value = false; settings.value = false }
+  else if (!active && previous && !videoFullscreen.value) showControls()
+}
+function videoFullScreen(value: boolean) { const wasFullscreen = videoFullscreen.value; videoFullscreen.value = value; if (!value && !videoActive.value) showControls(); if (wasFullscreen && !value) emit('video-exit') }
+function deleteMedia() { mixedVideo.value?.pause(); emit('delete-media', page.value) }
+watch(settings, () => { if (isVideo.value) scheduleVideoMenuHide() })
+watch(page, () => { mixedVideo.value?.pause(); videoPlaying.value = false; videoFullscreen.value = false; videoActive.value = false })
 function toggleControls() {
   if (Date.now() < suppressClickUntil || window.getSelection()?.toString()) return
   settings.value = false; controls.value = !controls.value
 }
 function surfaceClick(event: MouseEvent) {
+  if (isVideo.value && (videoFullscreen.value || videoActive.value)) return
   if (!ready.value || Date.now() < suppressClickUntil || window.getSelection()?.toString()) return
   if (settings.value || mode.value === 'scroll') { toggleControls(); return }
   const bounds = viewport.value!.getBoundingClientRect()
@@ -64,6 +99,7 @@ function surfaceClick(event: MouseEvent) {
 }
 let wheelSum = 0, wheelAt = 0, wheelTurnAt = 0, wheelSign = 0, wheelLocked = false
 function wheel(event: WheelEvent) {
+  if (isVideo.value && (videoFullscreen.value || videoActive.value)) return
   if (!ready.value || mode.value !== 'page' || settings.value || event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY) || !event.deltaY) return
   const view = viewport.value!
   const sign = Math.sign(event.deltaY), now = Date.now()
@@ -96,13 +132,13 @@ function measured(event: Event) {
 }
 function measureFrame() { if (viewport.value) frame.value = { width: viewport.value.clientWidth, height: viewport.value.clientHeight } }
 function setFit(value: 'width' | 'screen' | 'original') { fit.value = value; zoom.value = 100; void nextTick(() => requestAnimationFrame(measureFrame)) }
-function toggleSettings() { controls.value = true; settings.value = !settings.value }
-function surfaceKey(event: KeyboardEvent) { if (event.target === event.currentTarget && event.key === 'Enter') { event.preventDefault(); toggleControls() } }
+function toggleSettings() { controls.value = true; settings.value = !settings.value; scheduleVideoMenuHide() }
+function surfaceKey(event: KeyboardEvent) { if (!videoActive.value && event.target === event.currentTarget && event.key === 'Enter') { event.preventDefault(); toggleControls() } }
 const ready = ref(false)
 const status = ref('읽던 위치 확인 중…')
 const broken = ref(false)
 // Page mode waits for the current image before turning again.
-const pageLoading = ref(true)
+const pageLoading = ref(!isVideo.value)
 // The indicator appears only for loads longer than 0.2 s, so cached pages do not flicker.
 const showLoading = ref(false)
 let loadingTimer: ReturnType<typeof setTimeout> | undefined
@@ -182,7 +218,7 @@ function openPrompt(reason: 'end' | 'back') {
 // The app cancels a browser back gesture while reading and asks here instead.
 watch(() => props.backPrompt, () => openPrompt('back'))
 function move(delta: number, repeat = false) {
-  if (!ready.value || endPrompt.value?.open || (mode.value === 'page' && pageLoading.value)) return
+  if (!ready.value || endPrompt.value?.open || (!isVideo.value && mode.value === 'page' && pageLoading.value)) return
   if (delta > 0 && page.value === props.book.pages - 1) {
     if (!repeat) openPrompt('end')
     return
@@ -190,10 +226,15 @@ function move(delta: number, repeat = false) {
   page.value = clamp(page.value + delta)
 }
 function jump(event: Event) { page.value = clamp(Number((event.target as HTMLInputElement).value) - 1); locate() }
-function close() { clearTimeout(hideTimer); clearTimeout(timer); save(); emit('close') }
+function close() { mixedVideo.value?.pause(); clearTimeout(hideTimer); clearTimeout(timer); save(); emit('close') }
 function keydown(event: KeyboardEvent) {
   if (props.detailOpen || endPrompt.value?.open || document.querySelector('dialog[open]')) return
   if (event.key === 'Escape') { if (settings.value) settings.value = false; else if (controls.value) controls.value = false; else showControls(); return }
+  if (isVideo.value && (videoFullscreen.value || videoActive.value)) {
+    if (event.target instanceof Element && event.target.closest('video,button,input,select,textarea')) return
+    if (event.key === 'PageDown' || event.key === 'PageUp') { event.preventDefault(); move(event.key === 'PageDown' ? 1 : -1) }
+    return
+  }
   if (event.target instanceof HTMLElement && (['INPUT','SELECT','TEXTAREA'].includes(event.target.tagName) || event.target.isContentEditable)) return
   if (event.key === ' ') { if (event.target instanceof HTMLElement && event.target.closest('button')) return; event.preventDefault(); toggleControls(); return }
   if (mode.value === 'scroll') {
@@ -211,6 +252,7 @@ function keydown(event: KeyboardEvent) {
 let touch: { x: number; y: number; top: boolean; bottom: boolean; left: boolean; right: boolean; edge: boolean } | null = null
 const EDGE = 24
 function touchstart(event: TouchEvent) {
+  if (isVideo.value && (videoFullscreen.value || videoActive.value)) { touch = null; return }
   if (event.touches.length !== 1) suppressClickUntil = Date.now() + 700
   const view = viewport.value
   const x = event.touches[0]?.clientX ?? 0
@@ -225,6 +267,7 @@ function touchstart(event: TouchEvent) {
   } : null
 }
 function touchend(event: TouchEvent) {
+  if (isVideo.value && (videoFullscreen.value || videoActive.value)) { touch = null; return }
   const start = touch; touch = null
   if (!start || !event.changedTouches.length) return
   const dx = event.changedTouches[0].clientX - start.x, dy = event.changedTouches[0].clientY - start.y
@@ -260,7 +303,7 @@ async function setRead(completed: boolean) {
 function visibility() { if (document.visibilityState === 'hidden') flush(); else reportMediaShown() }
 watch([page, mode], () => {
   broken.value = false
-  pageLoading.value = mode.value === 'page'
+  pageLoading.value = !isVideo.value && mode.value === 'page'
   if (!ready.value) return
   status.value = '저장 중…'
   clearTimeout(timer); timer = setTimeout(save, 350)
@@ -332,39 +375,41 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
 
 </script>
 <template>
-  <section ref="reader" class="reader" :class="{ 'chrome-visible': controls }" role="dialog" aria-modal="true" aria-label="작품 뷰어">
+  <section ref="reader" class="reader" :class="{ 'chrome-visible': controls, 'video-mode': isVideo, 'video-active': videoActive }" role="dialog" aria-modal="true" aria-label="작품 뷰어">
     <div ref="viewport" class="reader-viewport" tabindex="0" aria-label="읽기 화면 · 좌우 페이지 이동, 중앙 메뉴 표시" @click="surfaceClick" @wheel="wheel" @pointercancel="pointer = null" @touchcancel="touch = null" @keydown="surfaceKey" @pointerdown="pointerDown" @pointerup="pointerUp" @touchstart="touchstart" @touchend.passive="touchend">
       <div v-if="!ready" class="empty-state"><span class="loader" />읽던 위치를 불러오는 중</div>
       <template v-else-if="mode === 'page'">
-        <div v-if="broken" class="empty-state" @click.stop>이미지를 불러오지 못했습니다.<UButton variant="outline" color="neutral" @click="broken = false">다시 불러오기</UButton></div>
-        <video ref="mixedVideo" v-else-if="currentMedia?.kind === 'video'" :key="page" :src="imageUrl(page)" class="mixed-video" controls playsinline preload="metadata" @click.stop @loadedmetadata="pageLoading = false" @loadeddata="mediaLoaded" @playing="mediaLoaded" @error="broken = true; pageLoading = false; displayedMedia = ''" />
-        <div v-else class="page-stage" :style="{ width: `${Math.max(frame.width, imageWidth)}px` }"><img :key="mixed ? page : undefined" class="page-image" :style="{ width: `${imageWidth}px` }" :src="imageUrl(page)" :alt="`${page + 1}페이지`" draggable="false" @load="measured" @error="broken = true; pageLoading = false; displayedMedia = ''"></div>
+        <div v-if="broken" class="empty-state" @click.stop>{{ isVideo ? '동영상을 불러오지 못했습니다.' : '이미지를 불러오지 못했습니다.' }}<UButton variant="outline" color="neutral" @click="broken = false">다시 불러오기</UButton></div>
+        <VideoPlayer ref="mixedVideo" v-else-if="isVideo" :key="page" :src="imageUrl(page)" :poster="currentMedia?.poster" @fullscreen="videoFullScreen" @active="videoActivity" @preview-tap="toggleControls" @loaded="pageLoading = false" @ready="mediaLoaded" @buffering="value => pageLoading = value" @playing="videoPlayback" @error="broken = true; pageLoading = false; displayedMedia = ''" />
+        <div v-else class="page-stage" :style="{ width: `${Math.max(frame.width, imageWidth)}px` }"><img :key="mixed ? page : undefined" :referrerpolicy="mixed ? 'no-referrer' : undefined" class="page-image" :style="{ width: `${imageWidth}px` }" :src="imageUrl(page)" :alt="`${page + 1}페이지`" draggable="false" @load="measured" @error="broken = true; pageLoading = false; displayedMedia = ''"></div>
       </template>
       <div v-else class="scroll-pages" :class="`scroll-${fit}`" :style="{ width: scrollWidth }"><ScrollPage v-for="index in book.pages" :key="index" :index="index - 1" :src="imageUrl(index - 1)" :fit="fit" :max-height="frame.height" :available-width="frame.width" :zoom="zoom" @visible="visible" /><div v-if="nextEpisode" class="episode-end"><UButton size="xl" icon="i-lucide-chevron-right" @click.stop="flush(); emit('episode', 1)">다음 회차 · {{ nextEpisode.title }}</UButton></div></div>
     </div>
 
     <Transition name="chrome"><header v-if="controls" class="top-overlay" @click.stop>
       <UButton variant="ghost" color="neutral" class="icon-button" @click="close" aria-label="목록으로 돌아가기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6" /></svg></UButton>
-      <div class="book-heading"><span>{{ mixed ? 'REDDIT' : toon ? toon.seriesTitle : ehentaiToken ? 'E-HENTAI' : book.remote ? 'ONLINE READER' : 'MY LIBRARY' }}</span><UBadge v-if="currentMedia?.badge" class="ml-2" size="xs" :color="currentMedia.badge === 'new' ? 'primary' : 'neutral'" variant="soft">{{ currentMedia.badge === 'new' ? 'NEW' : '✓ 봄' }}</UBadge><h2>{{ currentMedia?.title || book.title }}</h2></div>
-      <div class="top-actions"><UButton variant="ghost" color="neutral" class="icon-button" @click="emit('detail', page)" aria-label="작품 상세 보기" title="작품 상세 보기"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button" @click="toggleSettings" aria-label="뷰어 설정" :aria-expanded="settings"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M9 4v6m6 4v6" /></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button hide-button" @click="controls = false; settings = false" aria-label="메뉴 숨기기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg></UButton></div>
+      <div class="book-heading"><span>{{ mixed ? 'REDDIT' : toon ? toon.seriesTitle : ehentaiToken ? 'E-HENTAI' : book.remote ? 'ONLINE READER' : 'MY LIBRARY' }}</span><StatusCheck v-if="currentMedia?.badge === 'seen'" class="ml-2" label="봄" /><UBadge v-else-if="currentMedia?.badge === 'new'" class="ml-2" size="xs" color="primary" variant="soft">NEW</UBadge><h2>{{ currentMedia?.title || book.title }}</h2></div>
+      <div class="top-actions"><UButton v-if="mixed && currentMedia?.stored" variant="ghost" color="error" class="icon-button" :disabled="mediaSaving" @click="deleteMedia" aria-label="다운로드 파일 삭제" title="다운로드 파일 삭제"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" /></svg></UButton><UButton v-if="mixed" variant="ghost" color="neutral" class="icon-button" :loading="mediaSaving" :disabled="currentMedia?.stored || mediaSaving" @click="emit('keep', page)" :aria-label="currentMedia?.stored ? '영구 저장됨' : '다운로드 · 영구 저장'" :title="currentMedia?.stored ? '영구 저장됨' : '다운로드 · 영구 저장'"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" /></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button" @click="emit('detail', page)" aria-label="작품 상세 보기" title="작품 상세 보기"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button" @click="toggleSettings" aria-label="뷰어 설정" :aria-expanded="settings"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M9 4v6m6 4v6" /></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button hide-button" @click="controls = false; settings = false" aria-label="메뉴 숨기기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg></UButton></div>
     </header></Transition>
 
     <Transition name="panel"><aside v-if="controls && settings" class="settings-panel" aria-label="뷰어 설정 패널" @click.stop>
       <div class="panel-title"><h3>읽기 설정</h3><UButton variant="ghost" color="neutral" icon="i-lucide-x" square @click="settings = false" aria-label="설정 닫기" /></div>
-      <fieldset><legend>이미지 맞춤</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '화면 맞춤', value: 'screen' }, { label: '폭 맞춤', value: 'width' }, { label: '원본 크기', value: 'original' }]" :model-value="fit" @update:model-value="value => setFit(value as 'width' | 'screen' | 'original')" /></fieldset>
+      <fieldset v-if="!isVideo"><legend>이미지 맞춤</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '화면 맞춤', value: 'screen' }, { label: '폭 맞춤', value: 'width' }, { label: '원본 크기', value: 'original' }]" :model-value="fit" @update:model-value="value => setFit(value as 'width' | 'screen' | 'original')" /></fieldset>
       <fieldset v-if="!mixed"><legend>읽기 방식</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '페이지 넘김', value: 'page' }, { label: '세로 스크롤', value: 'scroll' }]" :model-value="mode" @update:model-value="value => mode = value as 'page' | 'scroll'" /></fieldset>
       <fieldset><legend>읽기 방향</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '오른쪽', icon: 'i-lucide-arrow-right', value: 'ltr' }, { label: '왼쪽', icon: 'i-lucide-arrow-left', value: 'rtl' }, { label: '세로', icon: 'i-lucide-arrow-down', value: 'ttb' }]" :model-value="direction" @update:model-value="value => direction = value as 'ltr' | 'rtl' | 'ttb'" /></fieldset>
       <div v-if="toon" class="read-actions episode-actions"><UButton variant="ghost" color="neutral" size="sm" block icon="i-lucide-chevron-left" :disabled="!previousEpisode" @click="flush(); emit('episode', -1)">이전 회차</UButton><UButton variant="ghost" color="neutral" size="sm" block trailing-icon="i-lucide-chevron-right" :disabled="!nextEpisode" @click="flush(); emit('episode', 1)">다음 회차</UButton></div><div class="zoom-row"><span>스와이프로 넘기기</span><USwitch v-model="swipe" aria-label="스와이프로 페이지 넘기기" /></div>
-      <div class="zoom-row"><span>확대 (%)</span><UInputNumber v-model="zoom" variant="soft" :min="50" :max="300" :step="25" size="sm" class="w-32" aria-label="확대 비율" /></div>
+      <div v-if="!isVideo" class="zoom-row"><span>확대 (%)</span><UInputNumber v-model="zoom" variant="soft" :min="50" :max="300" :step="25" size="sm" class="w-32" aria-label="확대 비율" /></div>
+      <div v-if="mixed" class="read-actions"><UButton variant="soft" :loading="mediaSaving" :disabled="currentMedia?.stored || mediaSaving" @click="emit('keep', page)">{{ currentMedia?.stored ? '영구 저장됨' : '다운로드 · 영구 저장' }}</UButton></div>
       <div v-if="!mixed" class="read-actions"><UButton variant="ghost" color="neutral" size="sm" block v-if="!ehentaiToken" @click="setRead(true)">읽음으로 표시</UButton><UButton variant="ghost" color="neutral" size="sm" block @click="setRead(false)">안 읽음으로 변경</UButton></div><p class="sync-status" role="status">{{ status }}</p><p class="keyboard-hint">← → 페이지 이동 · Space 메뉴</p>
     </aside></Transition>
 
-    <Transition name="chrome"><footer v-if="controls" class="bottom-overlay" @click.stop>
+    <Transition name="chrome"><footer v-if="controls && !videoActive" class="bottom-overlay" @click.stop>
       <div class="page-row" :class="{ reversed: direction === 'rtl' }" :style="{ flexDirection: direction === 'rtl' ? 'row-reverse' : 'row' }"><UButton variant="soft" color="neutral" size="xl" square icon="i-lucide-chevron-left" :disabled="!ready || page === 0" @click="move(-1); locate()" aria-label="이전 페이지" /><label class="page-count"><UInput :model-value="page + 1" type="number" min="1" :max="book.pages" inputmode="numeric" class="w-16" :ui="{ base: 'text-center' }" aria-label="페이지 번호" @change="jump" />
 <span>/ {{ book.pages }}</span></label><UButton variant="soft" color="neutral" size="xl" square icon="i-lucide-chevron-right" :disabled="!ready || !book.pages" @click="move(1); locate()" aria-label="다음 페이지" /><Transition name="loading-fade"><span v-if="showLoading" class="page-loading" role="status" aria-label="페이지 불러오는 중"><UIcon name="i-lucide-loader-circle" class="size-5 animate-spin" /></span></Transition></div>
       <USlider class="page-slider" :ui="{ root: 'cursor-pointer', thumb: 'cursor-grab active:cursor-grabbing' }" :min="1" :max="Math.max(2, book.pages)" :disabled="book.pages < 2" :model-value="page + 1" :dir="direction === 'rtl' ? 'rtl' : 'ltr'" @update:model-value="value => { if (typeof value === 'number') { page = clamp(value - 1); locate() } }"></USlider><span class="tap-hint">{{ mode !== 'page' ? '화면 터치로 메뉴 표시·숨기기' : direction === 'ttb' ? '위아래 터치·스와이프로 페이지 이동 · 중앙 터치로 메뉴' : '좌우 터치로 페이지 이동 · 중앙 터치로 메뉴' }}</span>
     </footer></Transition>
     <UButton variant="ghost" color="neutral" v-if="!controls" class="reveal-button" aria-label="읽기 메뉴 표시" @click="showControls"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" /></svg><span>{{ page + 1 }} / {{ book.pages }}</span><Transition name="loading-fade"><span v-if="showLoading" class="page-loading" role="status" aria-label="페이지 불러오는 중"><UIcon name="i-lucide-loader-circle" class="size-5 animate-spin" /></span></Transition></UButton>
+
     <p v-if="detailError" class="detail-error" role="alert">{{ detailError }}</p>
     <dialog ref="endPrompt" class="end-prompt" tabindex="-1" aria-labelledby="end-prompt-title">
       <h2 id="end-prompt-title">{{ promptReason === 'end' ? '마지막 페이지입니다' : '뷰어를 닫을까요?' }}</h2>
@@ -402,5 +447,7 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
 </style>
 
 <style scoped>
-.mixed-video{max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain}
+.reader-viewport{z-index:0}.top-overlay,.bottom-overlay,.reveal-button{z-index:10}.settings-panel{z-index:20}
+.video-mode .reader-viewport{overflow:hidden;scrollbar-gutter:auto}
+.video-active .reveal-button{top:max(12px,env(safe-area-inset-top));bottom:auto}
 </style>
