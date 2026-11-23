@@ -16,6 +16,50 @@ const emit = defineEmits<{ reading: [boolean]; 'stored-count': [number] }>()
 const items = ref<RedditItem[]>([]), error = ref(''), requesting = ref(false), selected = ref<number | null>(null), sentinel = ref<HTMLElement>()
 const readerItems = ref<RedditItem[]>([])
 const mediaReader = ref<InstanceType<typeof Reader>>()
+const revisions = ref<Record<string, number>>({}), thumbFailures = ref(new Set<string>()), mediaFailures = ref(new Set<string>())
+const retrying = ref(''), retryMany = ref(false)
+function thumbFailed(id: string) { thumbFailures.value.add(id) }
+function thumbLoaded(id: string) { thumbFailures.value.delete(id) }
+function mediaFailed(index: number) { const item = readerItems.value[index]; if (item) mediaFailures.value.add(item.id) }
+async function retryItem(id: string) {
+  if (retrying.value || keeping.value || redditStatus.value?.busy) return false
+  retrying.value = id; error.value = ''
+  let proceed = true
+  try {
+    const updated: RedditItem = await (await redditRequest(`items/${encodeURIComponent(id)}/refresh`, { method: 'POST' })).json()
+    items.value = items.value.map(item => item.id === id ? updated : item)
+    readerItems.value = readerItems.value.map(item => item.id === id ? { ...item, resource: updated.resource, stored: updated.stored, downloaded_at: updated.downloaded_at } : item)
+    thumbFailures.value.delete(id); mediaFailures.value.delete(id)
+  } catch (e) { error.value = String(e); proceed = !/403|401|429|처리 중|Failed to fetch|NetworkError/i.test(error.value) }
+  finally {
+    revisions.value = { ...revisions.value, [id]: (revisions.value[id] ?? 0) + 1 }
+    await nextTick()
+    const index = readerItems.value.findIndex(item => item.id === id)
+    if (index >= 0) mediaReader.value?.reloadMedia(index)
+    retrying.value = ''
+  }
+  return proceed
+}
+async function retryMedia(index: number) { const item = readerItems.value[index]; if (item) await retryItem(item.id) }
+const failedItems = computed(() => feedItems.value.filter(item => thumbFailures.value.has(item.id) || mediaFailures.value.has(item.id)))
+async function retryVisibleFailures() {
+  if (retryMany.value || retrying.value) return
+  retryMany.value = true
+  try {
+    for (const item of failedItems.value.slice(0, 50)) {
+      if (disposed) break
+      if (!await retryItem(item.id)) break
+      await new Promise(resolve => setTimeout(resolve, 1000))
+    }
+  } finally { retryMany.value = false }
+}
+async function retryDownloads() {
+  if (requesting.value || redditStatus.value?.busy || retrying.value || retryMany.value) return
+  requesting.value = true; error.value = ''
+  try { beginLoad(); await redditRequest('retry-failed', { method: 'POST' }); await refresh() }
+  catch (e) { error.value = String(e); loadHighlight.finish(false); trackingLoad = false }
+  finally { requesting.value = false }
+}
 let directPlay = false, galleryScroll = 0
 async function playVideo(index: number) { galleryScroll = window.scrollY; open(index); directPlay = true; await nextTick(); await mediaReader.value?.playVideoFullscreen() }
 async function videoExit() { if (!directPlay) return; const scroll = galleryScroll; close(); await nextTick(); window.scrollTo({ top: scroll, behavior: 'instant' }) }
@@ -34,7 +78,7 @@ const loadHighlight = new RedditLoadHighlight(), highlighted = ref(new Set<strin
 let trackingLoad = false, polling = false
 function beginLoad() { loadHighlight.begin(items.value.map(item => item.id)); trackingLoad = true }
 const detail = ref<RedditItem>()
-const book = computed(() => ({ id: 'reddit-gallery', title: 'Reddit', pages: readerItems.value.length, media: readerItems.value.map(item => ({ url: redditMediaUrl(item), poster: redditMediaUrl(item, true), kind: item.kind, title: item.title, stored: item.stored, badge: item.seen_at ? 'seen' as const : item.is_new ? 'new' as const : undefined })), initialPage: selected.value ?? 0 }))
+const book = computed(() => ({ id: 'reddit-gallery', title: 'Reddit', pages: readerItems.value.length, media: readerItems.value.map(item => ({ url: redditMediaUrl(item), poster: redditMediaUrl(item, true), kind: item.kind, title: item.title, stored: item.stored, revision: revisions.value[item.id] ?? 0, badge: item.seen_at ? 'seen' as const : item.is_new ? 'new' as const : undefined })), initialPage: selected.value ?? 0 }))
 const savingSeen = new Set<string>()
 const keeping = ref<string>()
 async function keep(index: number) {
@@ -50,6 +94,7 @@ async function keep(index: number) {
 async function mediaShown(index: number) {
   const snapshot = readerItems.value[index]
   if (!snapshot) return
+  mediaFailures.value.delete(snapshot.id)
   const current = items.value.find(item => item.id === snapshot.id)
   if (!current || current.seen_at || savingSeen.has(current.id)) return
   savingSeen.add(current.id)
@@ -73,7 +118,7 @@ watch([redditDisplayMode, mediaFilter, () => redditStatus.value?.config.subreddi
 watch(() => feedItems.value.length, count => { page.value = Math.min(page.value, Math.max(1, Math.ceil(count / batchSize.value))) })
 const refreshing = ref(false)
 watch(() => redditStatus.value?.busy, busy => { if (!busy) refreshing.value=false })
-function canRefresh() { return !disposed && selected.value === null && !detail.value && (props.savedOnly || !!redditStatus.value?.config.enabled) && !redditStatus.value?.busy && !redditStatus.value?.stopping && !requesting.value && !refreshing.value }
+function canRefresh() { return !disposed && !retrying.value && !retryMany.value && selected.value === null && !detail.value && (props.savedOnly || !!redditStatus.value?.config.enabled) && !redditStatus.value?.busy && !redditStatus.value?.stopping && !requesting.value && !refreshing.value }
 const pullArea = ref<InstanceType<typeof BottomPull>>()
 function resetScrollGate() { pullArea.value?.reset() }
 function canAccumulate() { return !disposed && automatic.value && selected.value === null && !detail.value && !!redditStatus.value?.config.enabled && !redditStatus.value.busy && !redditStatus.value.stopping && !requesting.value && !redditStatus.value.exhausted && feedItems.value.length > 0 && !!sentinel.value?.getClientRects().length }
@@ -93,7 +138,7 @@ async function more(manual = false) {
   try { beginLoad(); await redditRequest('batch', { method: 'POST' }); await refresh() } catch (e) { loadHighlight.finish(false); trackingLoad = false; error.value = String(e); automatic.value = false } finally { requesting.value = false }
 }
 const batchLabel = computed(() => redditStatus.value?.stopping ? '정지 중…' : redditStatus.value?.busy ? '정지' : feedItems.value.length ? (redditStatus.value?.config.mode === 'online' ? `다음 ${batchSize.value}개 불러오기` : `다음 ${batchSize.value}개 받기`) : (redditStatus.value?.config.mode === 'online' ? `${batchSize.value}개 불러오기` : `${batchSize.value}개 받기`))
-const batchDisabled = computed(() => requesting.value || redditStatus.value?.stopping || (!redditStatus.value?.busy && (refreshing.value || !redditStatus.value?.config.enabled || redditStatus.value?.exhausted)))
+const batchDisabled = computed(() => !!retrying.value || retryMany.value || requesting.value || redditStatus.value?.stopping || (!redditStatus.value?.busy && (refreshing.value || !redditStatus.value?.config.enabled || redditStatus.value?.exhausted)))
 async function toggleBatch() {
   if (!redditStatus.value?.busy) { await more(true); return }
   pullArea.value?.interrupt(); automatic.value = false; requesting.value = true; error.value = ''
@@ -133,6 +178,7 @@ onUnmounted(() => { disposed = true; resetScrollGate(); clearInterval(timer); em
     <header><div><h2>{{ savedOnly ? 'Reddit 저장 항목' : 'Reddit' }}</h2><p v-if="!savedOnly" :title="subscriberDescription(redditStatus?.config.subreddit || '')">r/{{ redditStatus?.config.subreddit }} · {{ subscriberLabel(redditStatus?.config.subreddit || '') }} · 추가 항목은 아래에 표시 · {{ feedItems.length }}개</p></div><div class="flex flex-wrap gap-2"><UButton variant="soft" :loading="refreshing" :disabled="!canRefresh()" @click="latest">목록 새로 확인</UButton><UButton v-if="!savedOnly" :disabled="batchDisabled" :color="redditStatus?.busy ? 'error' : 'primary'" @click="toggleBatch">{{ batchLabel }}</UButton></div></header>
     <AppSelect v-if="!savedOnly && redditStatus?.config.subreddits?.length" :model-value="redditStatus.config.subreddit" :options="redditStatus.config.subreddits.map(name => ({ value: name, label: `r/${name} · ${subscriberLabel(name)}` }))" label="서브레딧 선택" :disabled="requesting || redditStatus.busy" class="mb-4" @update:model-value="selectSubreddit" />
     <AppSelect v-model="mediaFilter" :options="[{value:'all',label:'전체'},{value:'image',label:'사진'},{value:'video',label:'동영상'}]" label="미디어 필터" class="mb-4" />
+    <div class="flex flex-wrap gap-2 mb-3"><UButton v-if="failedItems.length" variant="soft" :loading="retryMany" :disabled="!!retrying || !!redditStatus?.busy || !!keeping" @click="retryVisibleFailures">실패한 미디어 {{ failedItems.length }}개 다시 불러오기</UButton><UButton v-if="!savedOnly && redditStatus?.failed_downloads" variant="soft" :disabled="requesting || !!redditStatus?.busy || !!retrying || retryMany" @click="retryDownloads">다운로드 실패 {{ redditStatus.failed_downloads }}개 재시도</UButton></div>
     <p v-if="error" role="alert">{{ error }}</p><p v-if="!savedOnly" role="status">{{ redditStatus?.message }}</p>
     <p v-if="!feedItems.length && !redditStatus?.busy">{{ savedOnly ? '영구 저장한 Reddit 미디어가 없습니다.' : '설정에서 지정한 서브레딧의 미디어를 받아 갤러리로 표시합니다.' }}</p>
     <div ref="gallery" />
@@ -142,12 +188,13 @@ onUnmounted(() => { disposed = true; resetScrollGate(); clearInterval(timer); em
       <article v-for="item in [displayedItems[localIndex]!]" :key="item.id" :id="`reddit-card-${item.id}`" class="reddit-card" :class="{ 'reddit-just-loaded': highlighted.has(item.id) }">
         <div class="reddit-preview">
         <button class="reddit-cover" data-pull-surface type="button" @click="open(pageOffset + localIndex)" :aria-label="redditStatus?.config.show_titles === false ? `미디어 ${pageOffset + localIndex + 1} 보기` : `${item.title} 보기`">
-          <RedditThumb :id="item.id" :kind="item.kind" :stored="item.stored" :src="redditMediaUrl(item, true)" :title="redditStatus?.config.show_titles === false ? 'Reddit 미디어' : item.title" />
+          <RedditThumb :revision="revisions[item.id] ?? 0" @failed="thumbFailed(item.id)" @loaded="thumbLoaded(item.id)" :id="item.id" :kind="item.kind" :stored="item.stored" :src="redditMediaUrl(item, true)" :title="redditStatus?.config.show_titles === false ? 'Reddit 미디어' : item.title" />
           <span v-if="item.stored" class="media-stored" aria-label="영구 저장됨">↓</span>
           <span v-if="item.kind === 'gif'" class="media-kind">GIF</span>
           <StatusCheck v-if="item.seen_at" overlay label="봄" />
           <span v-else-if="item.is_new" class="media-state is-new" aria-label="새 이미지">NEW</span>
         </button>
+        <button v-if="thumbFailures.has(item.id) || mediaFailures.has(item.id) || !redditMediaUrl(item, true)" class="reddit-retry" type="button" :disabled="!!retrying || retryMany || !!redditStatus?.busy || !!keeping" aria-label="미디어 다시 불러오기" title="미디어 다시 불러오기" @click.stop="retryItem(item.id)">{{ retrying === item.id ? '…' : '↻' }}</button>
         <button v-if="item.kind === 'video'" class="reddit-play" data-pull-surface type="button" aria-label="전체 화면으로 동영상 재생" @click.stop="playVideo(pageOffset + localIndex)"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M11 7 26 16 11 25Z" /></svg></button>
         </div>
         <div v-if="redditStatus?.config.show_titles !== false" class="reddit-card-footer"><span class="reddit-title">{{ item.title }}</span></div>
@@ -171,7 +218,7 @@ onUnmounted(() => { disposed = true; resetScrollGate(); clearInterval(timer); em
       </GalleryDetail></template>
     </UModal>
 
-    <Reader ref="mediaReader" v-if="selected !== null && readerItems.length" :book="book" :detail-open="!!detail" :detail-error="error || undefined" :media-saving="!!keeping" @keep="keep" @delete-media="deleteMedia" @video-exit="videoExit" @detail="showDetail" @media-shown="mediaShown" @close="close" />
+    <Reader ref="mediaReader" v-if="selected !== null && readerItems.length" :book="book" :detail-open="!!detail" :detail-error="error || undefined" :media-saving="!!keeping || !!retrying || retryMany" @retry-media="retryMedia" @media-error="mediaFailed" @keep="keep" @delete-media="deleteMedia" @video-exit="videoExit" @detail="showDetail" @media-shown="mediaShown" @close="close" />
   </section>
 </template>
 <style scoped>
@@ -181,6 +228,7 @@ onUnmounted(() => { disposed = true; resetScrollGate(); clearInterval(timer); em
 .reddit-cover{position:relative;display:block;width:100%;padding:0;border:0;border-radius:0;background:transparent;cursor:pointer;flex-shrink:0}
 .reddit-cover:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
 .reddit-preview{position:relative;flex-shrink:0}.reddit-play{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:56px;height:56px;padding:0;border:0;border-radius:50%;background:#0009;color:white;cursor:pointer}.reddit-play svg{width:28px;height:28px;fill:currentColor;pointer-events:none}.reddit-play:focus-visible{outline:3px solid var(--ui-primary);outline-offset:3px}
+.reddit-retry{position:absolute;bottom:8px;left:8px;display:grid;place-items:center;width:36px;height:36px;border:0;border-radius:50%;background:#000b;color:var(--ui-primary);font-size:24px;cursor:pointer}.reddit-retry:disabled{opacity:.5;cursor:wait}
 .reddit-card-footer{padding:8px 10px}
 .reddit-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;font-size:13px;line-height:1.5}
 .media-kind{position:absolute;top:8px;right:8px;background:#000b;color:white;border-radius:6px;padding:4px 8px;font-size:12px;pointer-events:none}

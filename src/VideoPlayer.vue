@@ -82,7 +82,7 @@ async function start(forceFullscreen = false) {
     pause()
   }
 }
-function failed() { if (!starting.value && !active.value) return; message.value='동영상을 불러오지 못했습니다.'; pause() }
+function failed() { if (!starting.value && !active.value) return; message.value='동영상을 불러오지 못했습니다.'; pause(); emit('error') }
 function played() {
   if (!active.value) { video.value?.pause(); return }
   starting.value=false; buffering.value=false; emit('buffering',false); emit('ready'); emit('playing',true)

@@ -21,6 +21,7 @@ onUnmounted(() => clearInterval(timer))
 <template>
   <section class="reddit-settings">
     <h3>Reddit · 테스트</h3>
+    <p class="auth-help">불러오기 실패: 썸네일의 ↻ 또는 뷰어의 다시 불러오기로 원본 주소를 갱신합니다. 상단에서 실패한 항목을 최대 50개씩 순차 재시도합니다. 차단·요청 제한 시 중단합니다. 저장했던 파일이 없는 경우만 다시 받고, 존재하는 파일은 덮어쓰지 않습니다.</p>
     <div class="auth-help"><strong>목록 표시 안내 · 테스트</strong><p>아래로 추가 로딩하면 기존 순서를 유지하며 끝에 붙입니다. 맨 위에서 당기거나 ‘목록 새로 확인’을 누르면 최신 목록을 조회한 뒤 전체를 게시 날짜순으로 정리합니다. 이전 탐색 위치는 유지됩니다.</p><p>초록색 테두리: 이번 로딩으로 새로 추가된 이미지·영상입니다. 다음 로딩이 성공하면 이번 추가 항목으로 바뀝니다. 중복 URL 갱신은 제외하며, 화면을 다시 열면 해제됩니다.</p><p>NEW: 서버에 있던 항목보다 게시일이 최근인 항목 · ✓: 뷰어에서 실제로 본 항목 · 안 본 항목: 표시 없음. 초록색 테두리는 NEW·본 상태와 별개입니다.</p></div>
     <p class="auth-help">기본 꺼짐. 공식 gallery-dl 실행 파일 설치와 Reddit 쿠키 업로드 후 사용할 수 있습니다.</p>
     <div class="reddit-install"><span>gallery-dl {{ redditStatus?.version || '미설치' }}</span><UButton variant="soft" :loading="redditStatus?.installing" :disabled="busy || redditStatus?.busy" @click="run(async () => { await redditRequest('install', { method: 'POST' }); await loadReddit() })">{{ redditStatus?.installed ? '실행 파일 업데이트' : '실행 파일 설치' }}</UButton></div>

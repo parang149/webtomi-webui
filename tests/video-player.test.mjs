@@ -8,7 +8,7 @@ const code = ts.transpileModule(script, { compilerOptions: { target: ts.ScriptTa
 function setup(native = false, desktop = false) {
   const events = [], counts = { play: 0, pause: 0, load: 0, nativeEnter: 0 }
   const document = { fullscreenElement: null, addEventListener() {}, removeEventListener() {}, async exitFullscreen() { this.fullscreenElement = null } }
-  const api = new Function('document', 'defineProps', 'defineEmits', 'defineExpose', 'ref', 'onMounted', 'onBeforeUnmount', 'matchMedia', `${code}; return {start,tapPreview,pointerDown,pointerUp,changed,metadata,nativeBegin,reset,pause,played,waiting,canplay,preview,buffering,frame,video,fullscreen,starting,active}`)(document, () => ({ src: 'https://v.redd.it/example/video.mp4' }), () => (...args) => events.push(args), () => {}, value => ({ value }), () => {}, () => {}, query => ({ matches: query.includes('pointer: fine') && desktop }))
+  const api = new Function('document', 'defineProps', 'defineEmits', 'defineExpose', 'ref', 'onMounted', 'onBeforeUnmount', 'matchMedia', `${code}; return {failed,start,tapPreview,pointerDown,pointerUp,changed,metadata,nativeBegin,reset,pause,played,waiting,canplay,preview,buffering,frame,video,fullscreen,starting,active}`)(document, () => ({ src: 'https://v.redd.it/example/video.mp4' }), () => (...args) => events.push(args), () => {}, value => ({ value }), () => {}, () => {}, query => ({ matches: query.includes('pointer: fine') && desktop }))
   const container = native ? {} : { async requestFullscreen() { document.fullscreenElement = container } }
   api.frame.value = container
   const video = { readyState: 0, async play() { counts.play++ }, pause() { counts.pause++ }, load() { counts.load++ }, removeAttribute(name) { delete this[name] } }
@@ -80,4 +80,11 @@ test('poster taps only request the shared viewer menu, while a swipe never trigg
   assert.deepEqual(api.events,[['preview-tap']]); assert.equal(api.video.value.src,undefined); assert.equal(api.counts.play,0)
   api.pointerDown({clientX:300,clientY:200}); api.pointerUp({clientX:100,clientY:200}); api.tapPreview()
   assert.equal(api.events.length,1)
+})
+
+
+test('video failures unload playback and expose retry to the shared reader', async () => {
+  const api=setup();await api.start();api.failed()
+  assert.equal(api.video.value.src,undefined)
+  assert.deepEqual(api.events.at(-1),['error'])
 })
