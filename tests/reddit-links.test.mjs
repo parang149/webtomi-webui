@@ -9,6 +9,17 @@ const module = { exports: {} }
 new Function('module', 'exports', 'require', code)(module, module.exports, createRequire(import.meta.url))
 const { redditMediaUrl, redditPostUrl } = module.exports
 
+test('enabled Reddit proxy keeps remote media on authenticated relay routes and saved files local', () => {
+  module.exports.redditStatus.value = { proxy: { enabled: true } }
+  const item = { id: 'remote', kind: 'video', resource: { playback: 'https://v.redd.it/a.mp4', thumbnail: 'https://preview.redd.it/a.jpg' } }
+  try {
+    assert.equal(redditMediaUrl(item), '/api/reddit/media/remote')
+    assert.equal(redditMediaUrl(item, true), '/api/reddit/thumbnail/remote')
+    assert.equal(redditMediaUrl({ ...item, stored: true }), '/api/reddit/media/remote')
+    assert.equal(redditMediaUrl({ ...item, stored: true, kind: 'image' }, true), '/api/reddit/media/remote')
+  } finally { module.exports.redditStatus.value = undefined }
+})
+
 test('original post links use metadata and only validated Reddit fallback paths', () => {
   assert.equal(redditPostUrl({resource:{post_id:'abc123'}}), 'https://www.reddit.com/comments/abc123/')
   assert.equal(redditPostUrl({resource:{source:'https://www.reddit.com/r/test/comments/abc123/title/?x=1'}}), 'https://www.reddit.com/comments/abc123/')

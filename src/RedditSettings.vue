@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
+import RedditProxySettings from './RedditProxySettings.vue'
 import RedditSubreddits from './RedditSubreddits.vue'
 import { loadReddit, redditStatus, redditRequest, refreshRedditSubscribers } from './reddit-client'
 const showTitles = ref(true), batchSize = ref(30)
@@ -28,6 +29,7 @@ onUnmounted(() => clearInterval(timer))
     <p class="auth-help">공식 gdl-org/builds 릴리스에서 현재 서버용 실행 파일을 받고 SHA256을 확인합니다. 현재 x86_64 Linux·Windows 지원.</p>
     <label>Reddit 쿠키 (.txt)<input type="file" accept=".txt,text/plain" :disabled="busy || redditStatus?.busy" @change="upload"></label>
     <div class="reddit-install"><span>{{ redditStatus?.cookies ? 'Reddit 쿠키 등록됨' : '쿠키 없음' }}</span><UButton v-if="redditStatus?.cookies" color="neutral" variant="ghost" :disabled="busy || redditStatus?.busy" @click="run(async () => { await redditRequest('cookies', { method: 'DELETE' }); await load() })">쿠키 삭제 · 기능 끄기</UButton></div>
+    <RedditProxySettings v-if="redditStatus" />
     <RedditSubreddits v-model="subreddits" :disabled="busy || redditStatus?.busy" />
     <div class="reddit-install"><span class="auth-help">구독자 수는 최초·누락 시 조회, 이후 1주일이 지난 선택 항목을 갱신합니다.</span><UButton variant="soft" color="neutral" :loading="redditStatus?.subscribers_refreshing" :disabled="busy || redditStatus?.installing" @click="run(() => refreshRedditSubscribers(true))">구독자 수 갱신</UButton></div>
     <p v-if="redditStatus?.subscribers_message" class="auth-help" role="status">{{ redditStatus.subscribers_message }}</p>
@@ -36,7 +38,7 @@ onUnmounted(() => clearInterval(timer))
     <label>받을 미디어<USelect v-model="allMedia" :items="[{ label: '이미지만', value: false }, { label: '이미지 + GIF + 동영상', value: true }]" class="w-full" :disabled="redditStatus?.busy" /></label>
     <label>한 번에 불러올 개수<UInputNumber v-model="batchSize" :min="1" :max="50" :step="1" :disabled="busy || redditStatus?.busy" /></label>
     <label>이용 방식<USelect v-model="mode" :items="[{ label: '서버에 영구 저장', value: 'download' }, { label: '온라인 연결 · URL 직접 열람', value: 'online' }]" class="w-full" :disabled="busy || redditStatus?.busy" /></label>
-    <p v-if="mode === 'online'" class="auth-help">썸네일·이미지·영상은 브라우저에서 원격 URL로 직접 엽니다. 서버에는 주소와 상태만 저장하며 다운로드 버튼을 누를 때만 파일을 저장합니다. 일부 외부 영상이나 음성은 직접 재생이 제한될 수 있습니다.</p>
+    <p v-if="mode === 'online'" class="auth-help">프록시를 켜면 썸네일·이미지·영상을 VPN으로 중계하며, 끄면 브라우저에서 원격 URL로 직접 엽니다. 서버에는 주소와 상태만 저장하며 다운로드 버튼을 누를 때만 파일을 저장합니다. 일부 외부 영상이나 음성은 직접 재생이 제한될 수 있습니다.</p>
     <label class="reddit-toggle"><USwitch v-model="showTitles" :disabled="busy" />갤러리에 포스트 제목 표시</label>
     <label class="reddit-toggle"><USwitch v-model="enabled" :disabled="busy" />Reddit 사용</label>
     <UButton :loading="busy" @click="run(save)">Reddit 설정 저장</UButton>

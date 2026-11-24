@@ -1,7 +1,8 @@
 import { ref } from 'vue'
 export type RedditConfig = { enabled: boolean; subreddit: string; subreddits: string[]; all_media: boolean; show_titles: boolean; batch_size?: number; request_interval?: number; mode?: 'download' | 'online' }
 export type RedditSubscribers = { count: number | null; updated_at: number | null; attempted_at: number | null }
-export type RedditStatus = { config: RedditConfig; installed: boolean; version: string; cookies: boolean; busy: boolean; installing: boolean; stopping: boolean; failed_downloads?: number; message: string; exhausted: boolean; subscribers?: Record<string, RedditSubscribers>; subscribers_refreshing?: boolean; subscribers_message?: string }
+export type RedditProxy = { enabled: boolean; url: string; username: string; password_set: boolean }
+export type RedditStatus = { proxy?: RedditProxy; config: RedditConfig; installed: boolean; version: string; cookies: boolean; busy: boolean; installing: boolean; stopping: boolean; failed_downloads?: number; message: string; exhausted: boolean; subscribers?: Record<string, RedditSubscribers>; subscribers_refreshing?: boolean; subscribers_message?: string }
 export type RedditItem = { id: string; title: string; kind: 'image' | 'gif' | 'video'; created: number; downloaded_at?: number | null; sequence?: number; subreddit: string; seen_at?: number | null; is_new?: boolean; stored?: boolean; resource?: { source?: string; playback?: string; thumbnail?: string; post_id?: string } }
 export const redditStatus = ref<RedditStatus>()
 export async function redditRequest(path: string, init?: RequestInit) {
@@ -28,6 +29,7 @@ export function subscriberDescription(name: string) {
 
 export function redditMediaUrl(item: RedditItem, thumbnail = false) {
   if (item.stored && (!thumbnail || item.kind !== 'video')) return `/api/reddit/media/${item.id}`
+  if (redditStatus.value?.proxy?.enabled) return `/api/reddit/${thumbnail ? 'thumbnail' : 'media'}/${item.id}`
   const candidate = thumbnail ? item.resource?.thumbnail : item.resource?.playback || item.resource?.source
   try {
     const url = new URL(candidate || '')
