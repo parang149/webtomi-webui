@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import type { VideoDiagnostic } from './video-diagnostics'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 const props = defineProps<{ src: string; poster?: string }>()
-const emit = defineEmits<{ loaded: []; buffering: [value: boolean]; ready: []; playing: [value: boolean]; fullscreen: [value: boolean]; active: [value: boolean]; 'preview-tap': []; error: [] }>()
+const emit = defineEmits<{ loaded: []; buffering: [value: boolean]; ready: []; playing: [value: boolean]; fullscreen: [value: boolean]; active: [value: boolean]; 'preview-tap': []; error: []; diagnostic: [report: VideoDiagnostic] }>()
 type NativeVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void; webkitExitFullscreen?: () => void; webkitDisplayingFullscreen?: boolean }
 const frame = ref<HTMLElement>(), video = ref<NativeVideo>(), preview = ref<HTMLElement>()
 const fullscreen = ref(false), starting = ref(false), message = ref(''), posterBroken = ref(false)
@@ -18,6 +19,13 @@ function expandPreview() {
     { transform: `translate(${entryBounds.left-target.left}px,${entryBounds.top-target.top}px) scale(${entryBounds.width/target.width},${entryBounds.height/target.height})` },
     { transform: 'none' },
   ], { duration: 280, easing: 'cubic-bezier(.2,.8,.2,1)' })
+}
+let reported = false
+function reportFailure(event: VideoDiagnostic['event']) {
+  if (disposed || reported) return
+  reported = true
+  const element=video.value
+  emit('diagnostic', {event, code:element?.error?.code ?? 0, ready:element?.readyState ?? 0, network:element?.networkState ?? 0, original:props.src.startsWith('/api/reddit/video/')})
 }
 let nativePending = false, disposed = false, startPoint: { x: number; y: number } | null = null, ignoreTapUntil = 0
 let nativeTimer: ReturnType<typeof setTimeout> | undefined
@@ -46,43 +54,48 @@ function changed() {
 function nativeBegin() {
   if (disposed || !nativePending) { video.value?.webkitExitFullscreen?.(); return }
   clearTimeout(nativeTimer); fullscreen.value=true; active.value=true; emit('active',true); emit('fullscreen',true)
-  void video.value?.play().catch(()=> { message.value='재생할 수 없습니다.'; pause() })
+  void video.value?.play().catch((e: unknown)=> { if(disposed || !active.value) return; reportFailure((e as {name?:string})?.name === 'NotAllowedError' ? 'policy' : 'unknown'); message.value='재생할 수 없습니다.'; emit('error'); pause() })
 }
 function metadata() {
   emit('loaded')
   if (nativePending && !fullscreen.value) {
     try { video.value?.webkitEnterFullscreen?.() }
-    catch { message.value='전체 화면 재생을 시작하지 못했습니다. 다시 눌러 주세요.'; pause() }
+    catch { reportFailure('fullscreen'); message.value='전체 화면 재생을 시작하지 못했습니다. 다시 눌러 주세요.'; emit('error'); pause() }
   }
 }
 async function start(forceFullscreen = false) {
   if (Date.now()<ignoreTapUntil || starting.value || active.value) return
   const element=video.value, container=frame.value
   if (!element || !container) return
-  message.value=''; entryBounds=container.getBoundingClientRect?.(); starting.value=true
+  reported=false; message.value=''; entryBounds=container.getBoundingClientRect?.(); starting.value=true
   element.src=props.src
   inlineMode.value=!forceFullscreen && desktopPointer()
+  let stage: 'fullscreen' | 'play' = 'fullscreen'
   try {
     if (inlineMode.value) {
       active.value=true; emit('active',true)
-      await element.play()
+      stage='play'; await element.play()
     } else if (container.requestFullscreen) {
       await container.requestFullscreen()
       if (disposed || document.fullscreenElement !== container) { pause(); return }
       fullscreen.value=true; active.value=true; emit('active',true); emit('fullscreen',true)
-      await element.play()
+      stage='play'; await element.play()
     } else if (element.webkitEnterFullscreen) {
       nativePending=true
-      nativeTimer=setTimeout(()=> { if (!fullscreen.value) { message.value='전체 화면을 열지 못했습니다. 다시 눌러 주세요.'; pause() } },10000)
+      nativeTimer=setTimeout(()=> { if (!fullscreen.value) { reportFailure('timeout'); message.value='전체 화면을 열지 못했습니다. 다시 눌러 주세요.'; emit('error'); pause() } },props.src.startsWith('/api/reddit/video/') ? 90000 : 10000)
       element.load()
       if (element.readyState>=1) element.webkitEnterFullscreen()
     } else throw new Error('Fullscreen unavailable')
-  } catch {
+  } catch (e) {
+    if (disposed || (!starting.value && !active.value)) return
+    const name=(e as {name?:string})?.name
+    reportFailure(stage === 'fullscreen' ? 'fullscreen' : name === 'NotAllowedError' ? 'policy' : name === 'NotSupportedError' ? 'unsupported' : 'unknown')
+    emit('error')
     message.value='재생을 시작하지 못했습니다. 브라우저 지원·영상 연결을 확인하세요.'
     pause()
   }
 }
-function failed() { if (!starting.value && !active.value) return; message.value='동영상을 불러오지 못했습니다.'; pause(); emit('error') }
+function failed() { if (!starting.value && !active.value) return; const code=video.value?.error?.code; reportFailure(code===1 ? 'aborted' : code===2 ? 'network' : code===3 ? 'decode' : code===4 ? 'unsupported' : 'unknown'); message.value='동영상을 불러오지 못했습니다.'; emit('error'); pause() }
 function played() {
   if (!active.value) { video.value?.pause(); return }
   starting.value=false; buffering.value=false; emit('buffering',false); emit('ready'); emit('playing',true)

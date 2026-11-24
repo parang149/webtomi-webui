@@ -1,30 +1,32 @@
 <script setup lang="ts">
+import type { VideoDiagnostic } from './video-diagnostics'
 import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import ScrollPage from './ScrollPage.vue'
 import VideoPlayer from './VideoPlayer.vue'
 import StatusCheck from './StatusCheck.vue'
+import MediaSaveButton from './MediaSaveButton.vue'
 import { refreshReading, markReading, pendingProgress, resetReading, type EhentaiDetails } from './reading-history'
-const props = defineProps<{ book: { id: string; title: string; pages: number; initialPage?: number; media?: { url: string; kind: 'image' | 'gif' | 'video'; title: string; badge?: 'new' | 'seen'; stored?: boolean; poster?: string; revision?: number }[]; remote?: boolean; ehentaiToken?: string; ehentaiDetails?: EhentaiDetails; toon?: { site?: 'toon' | 'wolf'; series: number; seriesTitle: string; episodes: { id: number; title: string }[]; local?: boolean }; metadata?: { toon_episode?: number } }; mediaSaving?: boolean; detailError?: string; backPrompt?: number; detailOpen?: boolean }>()
-const emit = defineEmits<{ close: []; detail: [page?: number]; episode: [number]; 'media-shown': [index: number]; keep: [index: number]; 'delete-media': [index: number]; 'video-exit': []; 'retry-media': [index: number]; 'media-error': [index: number] }>()
+const props = defineProps<{ book: { id: string; title: string; pages: number; initialPage?: number; media?: { url: string; kind: 'image' | 'gif' | 'video'; title: string; badge?: 'new' | 'seen'; stored?: boolean; poster?: string; revision?: number; save_state?: string; original_test?: boolean }[]; remote?: boolean; ehentaiToken?: string; ehentaiDetails?: EhentaiDetails; toon?: { site?: 'toon' | 'wolf'; series: number; seriesTitle: string; episodes: { id: number; title: string }[]; local?: boolean }; metadata?: { toon_episode?: number } }; mediaSaving?: boolean; detailError?: string; backPrompt?: number; detailOpen?: boolean }>()
+const emit = defineEmits<{ close: []; detail: [page?: number]; episode: [number]; 'media-shown': [index: number]; keep: [index: number]; 'cancel-keep': [index: number]; 'fallback-media': [index: number]; 'delete-media': [index: number]; 'video-exit': []; 'retry-media': [index: number]; 'media-error': [index: number]; 'media-diagnostic': [index: number, report: VideoDiagnostic] }>()
 const page = ref(props.book.initialPage ?? 0)
 const mixed = !!props.book.media
 const currentMedia = computed(() => props.book.media?.[page.value])
 const isVideo = computed(() => currentMedia.value?.kind === 'video')
 const mixedVideo = ref<InstanceType<typeof VideoPlayer>>()
-async function playVideoFullscreen() {
+async function playVideo() {
   if (!isVideo.value) return
   ready.value = true
   await nextTick()
-  await mixedVideo.value?.start(true)
+  await mixedVideo.value?.start()
 }
 function afterMediaDeleted(index: number) {
   if (page.value !== index) return
   if (index + 1 < props.book.pages) page.value = index + 1
   else close()
 }
-function reloadMedia(index: number) { if (page.value === index) { broken.value = false; pageLoading.value = true; displayedMedia.value = '' } }
+function reloadMedia(index: number) { if (page.value === index) { broken.value = false; pageLoading.value = !isVideo.value; displayedMedia.value = '' } }
 function retryMedia() { if (mixed) emit('retry-media', page.value); else broken.value = false }
-defineExpose({ playVideoFullscreen, afterMediaDeleted, reloadMedia })
+defineExpose({ playVideo, afterMediaDeleted, reloadMedia })
 const videoPlaying = ref(false)
 const videoFullscreen = ref(false)
 const videoActive = ref(false)
@@ -381,8 +383,8 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
     <div ref="viewport" class="reader-viewport" tabindex="0" aria-label="읽기 화면 · 좌우 페이지 이동, 중앙 메뉴 표시" @click="surfaceClick" @wheel="wheel" @pointercancel="pointer = null" @touchcancel="touch = null" @keydown="surfaceKey" @pointerdown="pointerDown" @pointerup="pointerUp" @touchstart="touchstart" @touchend.passive="touchend">
       <div v-if="!ready" class="empty-state"><span class="loader" />읽던 위치를 불러오는 중</div>
       <template v-else-if="mode === 'page'">
-        <div v-if="broken" class="empty-state" @click.stop>{{ isVideo ? '동영상을 불러오지 못했습니다.' : '이미지를 불러오지 못했습니다.' }}<UButton variant="outline" color="neutral"  :disabled="mediaSaving" @click="retryMedia">다시 불러오기</UButton></div>
-        <VideoPlayer ref="mixedVideo" v-else-if="isVideo" :key="`${page}:${currentMedia?.revision ?? 0}`" :src="imageUrl(page)" :poster="currentMedia?.poster" @fullscreen="videoFullScreen" @active="videoActivity" @preview-tap="toggleControls" @loaded="pageLoading = false" @ready="mediaLoaded" @buffering="value => pageLoading = value" @playing="videoPlayback" @error="broken = true; pageLoading = false; displayedMedia = ''; if (mixed) emit('media-error', page)" />
+        <div v-if="broken" class="empty-state" @click.stop>{{ isVideo ? '동영상을 불러오지 못했습니다.' : '이미지를 불러오지 못했습니다.' }}<UButton variant="outline" color="neutral"  :disabled="mediaSaving" @click="retryMedia">다시 불러오기</UButton><UButton v-if="currentMedia?.original_test" variant="soft" @click="emit('fallback-media', page); broken = false; pageLoading = false">기존 방식으로 재생</UButton><span v-if="currentMedia?.original_test">RedGIFs 원본 주소 조회 또는 영상 연결에 실패했습니다. 진단 로그에서 원인을 확인하세요.</span></div>
+        <VideoPlayer ref="mixedVideo" v-else-if="isVideo" :key="`${page}:${currentMedia?.revision ?? 0}`" :src="imageUrl(page)" :poster="currentMedia?.poster" @fullscreen="videoFullScreen" @active="videoActivity" @preview-tap="toggleControls" @loaded="pageLoading = false" @ready="mediaLoaded" @buffering="value => pageLoading = value" @playing="videoPlayback" @diagnostic="report => emit('media-diagnostic', page, report)" @error="broken = true; pageLoading = false; displayedMedia = ''; if (mixed) emit('media-error', page)" />
         <div v-else class="page-stage" :style="{ width: `${Math.max(frame.width, imageWidth)}px` }"><img :key="mixed ? `${page}:${currentMedia?.revision ?? 0}` : undefined" :referrerpolicy="mixed ? 'no-referrer' : undefined" class="page-image" :style="{ width: `${imageWidth}px` }" :src="imageUrl(page)" :alt="`${page + 1}페이지`" draggable="false" @load="measured" @error="broken = true; pageLoading = false; displayedMedia = ''; if (mixed) emit('media-error', page)"></div>
       </template>
       <div v-else class="scroll-pages" :class="`scroll-${fit}`" :style="{ width: scrollWidth }"><ScrollPage v-for="index in book.pages" :key="index" :index="index - 1" :src="imageUrl(index - 1)" :fit="fit" :max-height="frame.height" :available-width="frame.width" :zoom="zoom" @visible="visible" /><div v-if="nextEpisode" class="episode-end"><UButton size="xl" icon="i-lucide-chevron-right" @click.stop="flush(); emit('episode', 1)">다음 회차 · {{ nextEpisode.title }}</UButton></div></div>
@@ -390,8 +392,8 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
 
     <Transition name="chrome"><header v-if="controls" class="top-overlay" @click.stop>
       <UButton variant="ghost" color="neutral" class="icon-button" @click="close" aria-label="목록으로 돌아가기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6" /></svg></UButton>
-      <div class="book-heading"><span>{{ mixed ? 'REDDIT' : toon ? toon.seriesTitle : ehentaiToken ? 'E-HENTAI' : book.remote ? 'ONLINE READER' : 'MY LIBRARY' }}</span><StatusCheck v-if="currentMedia?.badge === 'seen'" class="ml-2" label="봄" /><UBadge v-else-if="currentMedia?.badge === 'new'" class="ml-2" size="xs" color="primary" variant="soft">NEW</UBadge><h2>{{ currentMedia?.title || book.title }}</h2></div>
-      <div class="top-actions"><UButton v-if="mixed" variant="ghost" color="neutral" class="icon-button" :disabled="mediaSaving" @click="retryMedia" aria-label="미디어 다시 불러오기" title="미디어 다시 불러오기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 13 3M18 18a8 8 0 0 1-13-3" /></svg></UButton><UButton v-if="mixed && currentMedia?.stored" variant="ghost" color="error" class="icon-button" :disabled="mediaSaving" @click="deleteMedia" aria-label="다운로드 파일 삭제" title="다운로드 파일 삭제"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" /></svg></UButton><UButton v-if="mixed" variant="ghost" color="neutral" class="icon-button" :loading="mediaSaving" :disabled="currentMedia?.stored || mediaSaving" @click="emit('keep', page)" :aria-label="currentMedia?.stored ? '영구 저장됨' : '다운로드 · 영구 저장'" :title="currentMedia?.stored ? '영구 저장됨' : '다운로드 · 영구 저장'"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" /></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button" @click="emit('detail', page)" aria-label="작품 상세 보기" title="작품 상세 보기"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button" @click="toggleSettings" aria-label="뷰어 설정" :aria-expanded="settings"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M9 4v6m6 4v6" /></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button hide-button" @click="controls = false; settings = false" aria-label="메뉴 숨기기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg></UButton></div>
+      <div class="book-heading"><span>{{ mixed ? 'REDDIT' : toon ? toon.seriesTitle : ehentaiToken ? 'E-HENTAI' : book.remote ? 'ONLINE READER' : 'MY LIBRARY' }}</span><StatusCheck v-if="currentMedia?.badge === 'seen'" class="ml-2" gray double label="뷰어로 봄" /><UBadge v-else-if="currentMedia?.badge === 'new'" class="ml-2" size="xs" color="primary" variant="soft">NEW</UBadge><h2>{{ currentMedia?.title || book.title }}</h2></div>
+      <div class="top-actions"><UButton v-if="mixed" variant="ghost" color="neutral" class="icon-button" :disabled="mediaSaving" @click="retryMedia" aria-label="미디어 다시 불러오기" title="미디어 다시 불러오기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 13 3M18 18a8 8 0 0 1-13-3" /></svg></UButton><UButton v-if="mixed && currentMedia?.stored" variant="ghost" color="error" class="icon-button" :disabled="mediaSaving" @click="deleteMedia" aria-label="다운로드 파일 삭제" title="다운로드 파일 삭제"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" /></svg></UButton><MediaSaveButton v-if="mixed" icon-only :stored="currentMedia?.stored" :blocked="mediaSaving" :state="currentMedia?.save_state" @save="emit('keep', page)" @cancel="emit('cancel-keep', page)" /><UButton variant="ghost" color="neutral" class="icon-button" @click="emit('detail', page)" aria-label="작품 상세 보기" title="작품 상세 보기"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button" @click="toggleSettings" aria-label="뷰어 설정" :aria-expanded="settings"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M9 4v6m6 4v6" /></svg></UButton><UButton variant="ghost" color="neutral" class="icon-button hide-button" @click="controls = false; settings = false" aria-label="메뉴 숨기기"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg></UButton></div>
     </header></Transition>
 
     <Transition name="panel"><aside v-if="controls && settings" class="settings-panel" aria-label="뷰어 설정 패널" @click.stop>
@@ -401,7 +403,7 @@ onUnmounted(() => { document.body.style.overflow = oldOverflow; resizeObserver?.
       <fieldset><legend>읽기 방향</legend><UTabs :content="false" size="sm" :ui="tabUi" :items="[{ label: '오른쪽', icon: 'i-lucide-arrow-right', value: 'ltr' }, { label: '왼쪽', icon: 'i-lucide-arrow-left', value: 'rtl' }, { label: '세로', icon: 'i-lucide-arrow-down', value: 'ttb' }]" :model-value="direction" @update:model-value="value => direction = value as 'ltr' | 'rtl' | 'ttb'" /></fieldset>
       <div v-if="toon" class="read-actions episode-actions"><UButton variant="ghost" color="neutral" size="sm" block icon="i-lucide-chevron-left" :disabled="!previousEpisode" @click="flush(); emit('episode', -1)">이전 회차</UButton><UButton variant="ghost" color="neutral" size="sm" block trailing-icon="i-lucide-chevron-right" :disabled="!nextEpisode" @click="flush(); emit('episode', 1)">다음 회차</UButton></div><div class="zoom-row"><span>스와이프로 넘기기</span><USwitch v-model="swipe" aria-label="스와이프로 페이지 넘기기" /></div>
       <div v-if="!isVideo" class="zoom-row"><span>확대 (%)</span><UInputNumber v-model="zoom" variant="soft" :min="50" :max="300" :step="25" size="sm" class="w-32" aria-label="확대 비율" /></div>
-      <div v-if="mixed" class="read-actions"><UButton variant="soft" :loading="mediaSaving" :disabled="currentMedia?.stored || mediaSaving" @click="emit('keep', page)">{{ currentMedia?.stored ? '영구 저장됨' : '다운로드 · 영구 저장' }}</UButton></div>
+      <div v-if="mixed" class="read-actions"><MediaSaveButton :stored="currentMedia?.stored" :blocked="mediaSaving" :state="currentMedia?.save_state" @save="emit('keep', page)" @cancel="emit('cancel-keep', page)" /></div>
       <div v-if="!mixed" class="read-actions"><UButton variant="ghost" color="neutral" size="sm" block v-if="!ehentaiToken" @click="setRead(true)">읽음으로 표시</UButton><UButton variant="ghost" color="neutral" size="sm" block @click="setRead(false)">안 읽음으로 변경</UButton></div><p class="sync-status" role="status">{{ status }}</p><p class="keyboard-hint">← → 페이지 이동 · Space 메뉴</p>
     </aside></Transition>
 

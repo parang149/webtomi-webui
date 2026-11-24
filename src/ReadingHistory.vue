@@ -9,16 +9,17 @@ import ViewToggle from './ViewToggle.vue'
 import GalleryCard from './GalleryCard.vue'
 import { scrollToControls, useIncremental } from './incremental'
 import SourceTabs from './SourceTabs.vue'
+import RedditPane from './RedditPane.vue'
 import { ehentaiCover } from './ehentai-cover'
 const props = defineProps<{ books: {id:string;title:string;pages:number;readable?:boolean}[] }>()
 type LocalBook = (typeof props.books)[number]
-const emit = defineEmits<{ read: [LocalBook & {remote?:boolean}]; localDetail: [LocalBook]; remoteDetail: [Gallery]; ehentaiRead: [EhentaiGallery, number, string]; ehentaiDetail: [EhentaiGallery]; toonRead: ['toon' | 'wolf', number, number, string]; toonDetail: [ToonSeries] }>()
+const emit = defineEmits<{ read: [LocalBook & {remote?:boolean}]; localDetail: [LocalBook]; remoteDetail: [Gallery]; ehentaiRead: [EhentaiGallery, number, string]; ehentaiDetail: [EhentaiGallery]; toonRead: ['toon' | 'wolf', number, number, string]; toonDetail: [ToonSeries]; reading: [boolean] }>()
 const error = ref(''), busy = ref('')
 const filter = ref('all')
 const comicSite = ref<'all' | 'toon' | 'wolf'>('all')
 const cookieName = 'hitomi-history-source'
 const savedSource = document.cookie.split(';').map(cookie => cookie.trim()).find(cookie => cookie.startsWith(cookieName + '='))?.slice(cookieName.length + 1)
-const source = ref(historySources.find(option => option.id === savedSource)?.id ?? 'all')
+const source = ref<typeof historySources[number]['id'] | 'reddit'>(savedSource === 'reddit' ? 'reddit' : historySources.find(option => option.id === savedSource)?.id ?? 'all')
 watch(source, value => {
   const secure = location.protocol === 'https:' ? '; Secure' : ''
   document.cookie = `${cookieName}=${value}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`
@@ -136,7 +137,9 @@ onMounted(refreshReading)
 <template>
   <section>
     <div class="toolbar history-toolbar"><h2>읽기 기록</h2><UButton variant="soft" color="neutral" @click="coverErrors.clear(); refreshReading()">새로고침</UButton></div>
-    <SourceTabs v-model="source" label="읽기 기록 출처" />
+    <SourceTabs v-model="source" label="읽기 기록 출처" reddit />
+    <RedditPane v-if="source === 'reddit'" history-only @reading="emit('reading', $event)" />
+    <template v-else>
     <div class="history-controls">
       <div class="history-filters"><label>표시<AppSelect v-model="filter" label="표시" :options="[{'value': 'all', 'label': '전체'}, {'value': 'reading', 'label': '읽는 중'}, {'value': 'read', 'label': '읽음'}]" /></label>
       <label v-if="source === 'toon'">사이트<AppSelect v-model="comicSite" label="사이트" :options="[{'value': 'all', 'label': '전체'}, {'value': 'toon', 'label': '일일툰'}, {'value': 'wolf', 'label': '늑대툰'}]" /></label></div>
@@ -152,6 +155,7 @@ onMounted(refreshReading)
       </GalleryCard>
     </div>
     <div v-if="more" ref="sentinel" class="load-more" aria-hidden="true" />
+    </template>
   </section>
 </template>
 

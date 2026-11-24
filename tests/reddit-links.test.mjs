@@ -9,6 +9,17 @@ const module = { exports: {} }
 new Function('module', 'exports', 'require', code)(module, module.exports, createRequire(import.meta.url))
 const { redditMediaUrl, redditPostUrl } = module.exports
 
+test('original RedGIFs test mode uses lazy resolver, preview fallback and saved files remain independent', () => {
+  module.exports.redditStatus.value={config:{redgifs_original:true},proxy:{enabled:true}}
+  const item={id:'v',kind:'video',resource:{playback:'https://v.redd.it/preview.mp4'}}
+  try {
+    assert.equal(redditMediaUrl(item),'/api/reddit/video/v')
+    assert.equal(redditMediaUrl(item,false,false),'/api/reddit/media/v')
+    assert.equal(redditMediaUrl({...item,stored:true}),'/api/reddit/media/v')
+    assert.equal(redditMediaUrl(item,true),'/api/reddit/thumbnail/v')
+  } finally {module.exports.redditStatus.value=undefined}
+})
+
 test('enabled Reddit proxy keeps remote media on authenticated relay routes and saved files local', () => {
   module.exports.redditStatus.value = { proxy: { enabled: true } }
   const item = { id: 'remote', kind: 'video', resource: { playback: 'https://v.redd.it/a.mp4', thumbnail: 'https://preview.redd.it/a.jpg' } }

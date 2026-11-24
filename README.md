@@ -13,3 +13,5 @@ WEBUI 0.2.4 requires server 0.5.4 (API 2) for Reddit online links, saved-media d
 WEBUI 0.2.5 requires server 0.5.6 (API 3) for per-item metadata refresh and persisted failed-download retries. Update the server first.
 
 WEBUI 0.2.6 requires server 0.5.7 (API 4) for the optional Reddit-only HTTP proxy and media streaming relay. Update the server first. Disabled by default; no media cache on the server.
+
+WEBUI 0.2.7 requires server 0.5.8 (API 8). Update the server first. Includes diskless original-video playback, cancellable explicit saves, persistent original URLs, three-hour Reddit list reuse, and separate Reddit reading history.

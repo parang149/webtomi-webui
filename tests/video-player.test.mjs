@@ -26,7 +26,7 @@ test('video stays unloaded until tap, then plays fullscreen and unloads on exit'
   assert.equal(api.fullscreen.value, false); assert.equal(api.video.value.src, undefined)
   assert.ok(api.counts.pause > 0); assert.deepEqual(api.events.at(-1), ['fullscreen', false])
 })
-test('gallery play forces fullscreen on desktop and exit returns to unloaded viewer preview', async () => {
+test('explicit fullscreen remains available on desktop and exit unloads video', async () => {
   const api = setup(false, true)
   await api.start(true)
   assert.equal(api.document.fullscreenElement, api.frame.value)
@@ -86,5 +86,34 @@ test('poster taps only request the shared viewer menu, while a swipe never trigg
 test('video failures unload playback and expose retry to the shared reader', async () => {
   const api=setup();await api.start();api.failed()
   assert.equal(api.video.value.src,undefined)
-  assert.deepEqual(api.events.at(-1),['error'])
+  const error=api.events.findIndex(event=>event[0]==='error')
+  assert.ok(error>=0);assert.ok(api.events.findIndex((event,index)=>index>error && event[0]==='fullscreen' && event[1]===false)>error)
 })
+
+test('decode failures report numeric browser state before reset without source URLs', async () => {
+  const api=setup();await api.start();api.video.value.error={code:3};api.video.value.readyState=1;api.video.value.networkState=2;api.failed()
+  const reports=api.events.filter(event=>event[0]==='diagnostic')
+  assert.equal(reports.length,1);assert.deepEqual(reports[0][1],{event:'decode',code:3,ready:1,network:2,original:false})
+  assert.doesNotMatch(JSON.stringify(reports),/https:|example|video.mp4/)
+})
+test('play-policy rejection is reported even when the media error event never fires', async () => {
+  const api=setup(false,true);api.video.value.play=async()=>{throw {name:'NotAllowedError',message:'secret signed URL'}}
+  await api.start()
+  assert.equal(api.events.find(event=>event[0]==='diagnostic')[1].event,'policy')
+  assert.ok(api.events.some(event=>event[0]==='error'));assert.doesNotMatch(JSON.stringify(api.events),/secret/)
+})
+test('normal user cancellation does not generate a false playback error',async()=>{
+  const api=setup(false,true);let rejectPlay
+  api.video.value.play=()=>new Promise((_,reject)=>{rejectPlay=reject})
+  const pending=api.start();api.pause();rejectPlay({name:'AbortError'})
+  await pending;assert.ok(!api.events.some(event=>event[0]==='diagnostic'))
+})
+
+ test('gallery reader entry uses the player desktop/mobile policy', async () => {
+  const reader = await readFile(new URL('../src/Reader.vue', import.meta.url), 'utf8')
+  const body = reader.match(/async function playVideo\(\) \{([\s\S]*?)\n\}/)[1]
+  let argument = 'not-called'
+  await new Function('isVideo','ready','nextTick','mixedVideo',`return (async()=>{${body}})()`)(
+    {value:true},{value:false},async()=>{}, {value:{start:async value=>{argument=value}}})
+  assert.equal(argument,undefined)
+ })

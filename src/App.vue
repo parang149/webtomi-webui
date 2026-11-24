@@ -429,7 +429,7 @@ onUnmounted(() => {
         <RemoteSearch v-show="tab === 'search'" :downloaded-ids="downloadedIds" :detail-item="remoteDetail" :reader-detail="screen.readerDetail" @detail="showRemoteDetail" @close-detail="goBack" @library-changed="refresh()" :local-covers="localDownloadCovers" @read="item => openLocal(`hitomi:${item.id}`) || open({ id: String(item.id), title: item.title, pages: item.pages, remote: true })" />
       </Transition>
       <Transition name="tab-fade">
-        <ReadingHistory class="reading-history-view" v-if="tab === 'history'" :books="books" @read="open" @local-detail="showDetail" @remote-detail="showRemoteDetail" @ehentai-read="openEhentai" @ehentai-detail="showEhentaiDetail" @toon-read="openToonHistory" @toon-detail="showToonDetail" />
+        <ReadingHistory @reading="value => { redditReading = value; emit('reading', value) }" class="reading-history-view" v-if="tab === 'history'" :books="books" @read="open" @local-detail="showDetail" @remote-detail="showRemoteDetail" @ehentai-read="openEhentai" @ehentai-detail="showEhentaiDetail" @toon-read="openToonHistory" @toon-detail="showToonDetail" />
       </Transition>
       <Transition name="tab-fade">
         <EhentaiSearch v-show="tab === 'ehentai'" :detail-item="ehentaiDetail" :reader-detail="screen.readerDetail" :downloaded-ids="downloadedEhentaiIds" @detail="showEhentaiDetail" @close-detail="goBack" :local-covers="localDownloadCovers" :open-local="(id: number) => openLocal(`ehentai:${id}`)" @read="openEhentai" @library-changed="refresh()" />

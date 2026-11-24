@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import RedditProxySettings from './RedditProxySettings.vue'
 import AppSelect from './AppSelect.vue'
 import CompareSelect from "./OptionSelect"
 import { trackLibraryTask } from './organize-job'
@@ -211,6 +212,7 @@ onMounted(() => run(load))
         <option value="safe">안전 (느림)</option>
       </CompareSelect></label>
       <p class="auth-help">{{ policyHelp[settings.preferences.network.image_policy] }} 거부가 반복되면 다운로드 이미지 요청을 40초~1분30초 쉬었다가 자동으로 이어받습니다. 표지와 바로 읽기는 쉬지 않습니다.</p>
+      <RedditProxySettings />
       <ToonOrigins site="toon" label="일일툰" example="103.204.13.68:8904" />
       <ToonOrigins site="wolf" label="늑대툰" example="wfwf540.com" />
     </template>
