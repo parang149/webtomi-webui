@@ -22,6 +22,8 @@ import GalleryDetail from './GalleryDetail.vue'
 import SourceTabs from './SourceTabs.vue'
 import RedditPane from './RedditPane.vue'
 import { loadReddit, redditStatus } from './reddit-client'
+import TapsPane from './TapsPane.vue'
+import { loadTaps, tapsEnabled } from './vault-client'
 const emit = defineEmits<{ reading: [boolean] }>()
 const props = defineProps<{ libraryRevision: number; workRevision: number }>()
 const menu = [
@@ -30,6 +32,7 @@ const menu = [
   { id: 'toon', label: '만화', icon: '' },
   { id: 'downloads', label: '작업', icon: 'M12 3v12m-5-5 5 5 5-5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4' },
   { id: 'reddit', label: 'Reddit', icon: 'M4 4h16v16H4zM8 14l3-3 3 3 2-2 4 4' },
+  { id: 'taps', label: 'TAPS', icon: 'M3 5h18v14H3zM3 15l5-5 4 4 3-3 6 6M15 9h.01' },
   { id: 'library', label: '라이브러리', icon: 'M4 4h4v16H4zm5 0h4v16H9zm6 1 4-1 4 15-4 1z' },
   { id: 'history', label: '읽기 기록', icon: 'M3 12a9 9 0 1 0 2-6M3 3v5h5m4-1v5l3 2' },
 ] as const
@@ -53,6 +56,16 @@ const newKey = () => Math.random().toString(36).slice(2)
 const screen = shallowRef<Screen>({ key: newKey(), tab: 'search' })
 const tab = computed(() => screen.value.tab)
 const redditReading = ref(false)
+watch(tapsEnabled, enabled => { if (!enabled && tab.value === 'taps') changeTab('library') })
+const navList = ref<HTMLElement | null>(null)
+const navEdges = ref({ left: false, right: false })
+function updateNavEdges() { const el = navList.value; if (!el) return; navEdges.value = { left: el.scrollLeft > 2, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 2 } }
+let navDrag: { x: number; left: number; moved: boolean } | null = null
+function navPointerDown(event: PointerEvent) { if (event.pointerType === 'mouse' && navList.value && navList.value.scrollWidth > navList.value.clientWidth) navDrag = { x: event.clientX, left: navList.value.scrollLeft, moved: false } }
+function navPointerMove(event: PointerEvent) { if (!navDrag || !navList.value) return; const dx = event.clientX - navDrag.x; if (Math.abs(dx) > 5) navDrag.moved = true; if (navDrag.moved) navList.value.scrollLeft = navDrag.left - dx }
+function navPointerUp() { const moved = navDrag?.moved; navDrag = null; if (moved) window.addEventListener('click', event => { event.stopPropagation(); event.preventDefault() }, { capture: true, once: true }) }
+watch([tapsEnabled, () => redditStatus.value?.config.enabled], () => nextTick(updateNavEdges))
+watch(tab, () => nextTick(() => { navList.value?.querySelector('[aria-current="page"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); updateNavEdges() }))
 watch(() => redditStatus.value?.config.enabled, enabled => { if (enabled === false && tab.value === 'reddit') changeTab('library') })
 const active = computed(() => screen.value.reader)
 const defaultTitle = document.title
@@ -401,6 +414,8 @@ onMounted(() => {
   void refresh()
   void loadInfoCacheMode()
   void loadReddit().catch(() => {})
+  void loadTaps().catch(() => {})
+  window.addEventListener('resize', updateNavEdges)
 })
 onUnmounted(() => {
   libraryEvents?.close()
@@ -414,8 +429,8 @@ onUnmounted(() => {
   <main class="app-workspace">
     <div v-show="!active">
       <nav v-show="!redditReading" class="main-nav" aria-label="주 메뉴">
-        <ul class="main-nav-list" :style="{ gridTemplateColumns: `repeat(${redditStatus?.config.enabled ? 5 : 4}, minmax(0, 1fr))` }">
-        <li v-for="item in menu.filter(item => item.id !== 'ehentai' && item.id !== 'toon' && (item.id !== 'reddit' || redditStatus?.config.enabled))" :key="item.id">
+        <ul ref="navList" class="main-nav-list" :class="{ 'fade-left': navEdges.left, 'fade-right': navEdges.right }" @scroll.passive="updateNavEdges" @pointerdown="navPointerDown" @pointermove="navPointerMove" @pointerup="navPointerUp" @pointercancel="navDrag = null">
+        <li v-for="item in menu.filter(item => item.id !== 'ehentai' && item.id !== 'toon' && (item.id !== 'reddit' || redditStatus?.config.enabled) && (item.id !== 'taps' || tapsEnabled))" :key="item.id">
           <UButton type="button" size="sm" class="sm:h-12 sm:text-base sm:font-semibold" :variant="(tab === item.id || item.id === 'search' && (tab === 'ehentai' || tab === 'toon')) ? 'soft' : 'ghost'" :color="(tab === item.id || item.id === 'search' && (tab === 'ehentai' || tab === 'toon')) ? 'primary' : 'neutral'" :aria-current="(tab === item.id || item.id === 'search' && (tab === 'ehentai' || tab === 'toon')) ? 'page' : undefined" @click="changeTab(item.id)">
           <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="item.icon"/></svg>
           {{ item.label }}
@@ -424,6 +439,7 @@ onUnmounted(() => {
         </ul>
       </nav>
       <EqualTabs v-if="tab === 'search' || tab === 'ehentai' || tab === 'toon'" class="search-tabs" label="검색 출처" :model-value="tab" :items="[{ label: 'Hitomi', value: 'search', avatar: { src: '/hitomi-favicon.png', size: '3xs' } }, { label: 'E-Hentai', value: 'ehentai', avatar: { src: '/ehentai-favicon.png', size: '3xs' } }, { label: '만화', value: 'toon', icon: 'i-lucide-book-open' }]" @update:model-value="value => { if (value === 'search' || value === 'ehentai' || value === 'toon') changeTab(value) }" />
+      <TapsPane v-if="tab === 'taps' && tapsEnabled" />
       <RedditPane v-if="tab === 'reddit' && redditStatus?.config.enabled" @reading="value => { redditReading = value; emit('reading', value) }" />
       <Transition name="tab-fade">
         <RemoteSearch v-show="tab === 'search'" :downloaded-ids="downloadedIds" :detail-item="remoteDetail" :reader-detail="screen.readerDetail" @detail="showRemoteDetail" @close-detail="goBack" @library-changed="refresh()" :local-covers="localDownloadCovers" @read="item => openLocal(`hitomi:${item.id}`) || open({ id: String(item.id), title: item.title, pages: item.pages, remote: true })" />
@@ -511,7 +527,7 @@ onUnmounted(() => {
 
 
 .main-nav{justify-content:flex-start;gap:4px;position:sticky;top:0;z-index:8;margin:4px 0 22px;padding:4px 0 0;background:var(--canvas);}
-.main-nav-list{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;width:100%;list-style:none;padding:0;margin:0}
+.main-nav-list{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(calc((100% - 16px) / 5),1fr);gap:4px;width:100%;list-style:none;padding:0;margin:0;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;-webkit-overflow-scrolling:touch}.main-nav-list::-webkit-scrollbar{display:none}.main-nav-list.fade-right{mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent)}.main-nav-list.fade-left{mask-image:linear-gradient(to left,#000 calc(100% - 28px),transparent)}.main-nav-list.fade-left.fade-right{mask-image:linear-gradient(to right,transparent,#000 28px,#000 calc(100% - 28px),transparent)}@media(min-width:640px){.main-nav-list{grid-auto-columns:minmax(0,1fr)}}
 .main-nav button{display:flex;width:100%;align-items:center;justify-content:center;gap:8px;white-space:nowrap}
 
 
@@ -553,6 +569,6 @@ onUnmounted(() => {
 
 </style>
 
-<style>@media(max-width:480px){.main-nav>div{width:100%}.main-nav-list{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}.main-nav-list button{width:100%;white-space:normal;text-align:center}}</style>
+<style>@media(max-width:480px){.main-nav>div{width:100%}.main-nav-list button{width:100%;white-space:normal;text-align:center}}</style>
 
 <style scoped>.library-results{--result-actions-columns:2;margin-top:16px}.metadata-values{display:flex;flex-wrap:wrap;gap:4px}.kind{font-size:12px}.tags{display:flex;flex-wrap:wrap;gap:6px}</style>

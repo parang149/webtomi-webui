@@ -9,6 +9,7 @@ import RedditSettings from './RedditSettings.vue'
 import RedditPullDebug from './RedditPullDebug.vue'
 import { notify } from './notifications'
 import LibraryApiSettings from './LibraryApiSettings.vue'
+import VaultApiSettings from './VaultApiSettings.vue'
 import { startOrganize } from './organize-job'
 import MaintenancePane from './MaintenancePane.vue'
 import { excludeAiGeneratedDefault, excludeGayTagsDefault, filterLayout } from './search-appearance'
@@ -197,7 +198,7 @@ onUnmounted(()=>{window.removeEventListener('popstate',syncScreen);window.remove
             <p class="auth-help">선택하면 바로 적용되며 이 브라우저에 저장됩니다.</p>
           </div>
           <MaintenancePane v-else-if="section === 'logs'" logs />
-          <LibraryApiSettings v-else-if="section === 'api'" />
+          <template v-else-if="section === 'api'"><LibraryApiSettings /><VaultApiSettings /></template>
           <div v-else-if="section === 'debug'" class="search-preferences">
             <RedditPullDebug />
             <UButton variant="outline" color="neutral" type="button" @click="notify('debug', '테스트 알림입니다.')">알림 테스트</UButton>

@@ -4,7 +4,7 @@ import ui from '@nuxt/ui/vite'
 import { version } from './package.json'
 
 // Server API version this WEBUI is written for; the server refuses bundles it cannot serve.
-const WEBUI_API = 8
+const WEBUI_API = 9
 const webuiManifest = { name: 'webui-manifest', generateBundle() { this.emitFile({ type: 'asset', fileName: 'webui.json', source: JSON.stringify({ version, api: WEBUI_API }) }) } }
 
 export default defineConfig({
