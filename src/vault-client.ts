@@ -4,7 +4,10 @@ export type VaultItem = {
   id: string; url: string; title: string; status: 'unread' | 'reviewing' | 'done'; note: string; tags: string[]
   createdAt: number; updatedAt: number; completedAt: number | null; deletedAt: number | null
   supjav?: { id?: string; thumb?: string | null; date?: string | null }
+  lastViewedAt?: number | null; urls?: string[]; code?: string | null; codeKey?: string | null; codeManual?: string | null
+  recordOnly?: boolean; nyaa?: Record<string, NyaaStat | undefined> | null
 }
+export type NyaaStat = { count?: number; first?: string; last?: string; savepath?: string }
 export type VaultStatus = { token: string | null; count: number; clients: { id: string; name: string; last_seen: number }[] }
 
 /** 탭 보관함 연동(토큰)이 켜져 있으면 주 메뉴에 TAPS 탭을 보인다. */
@@ -22,11 +25,15 @@ export async function loadTaps() {
   tapsEnabled.value = result.enabled
   return result.items
 }
-export function editTaps(id: string, fields: Partial<Pick<VaultItem, 'status' | 'note' | 'tags' | 'deletedAt' | 'completedAt'>>) {
+export function editTaps(id: string, fields: Partial<Pick<VaultItem, 'status' | 'note' | 'tags' | 'deletedAt' | 'completedAt' | 'codeManual' | 'code' | 'codeKey'>>) {
   return call<VaultItem>(`/api/taps/items/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(fields) })
 }
 export async function vaultSettings(method: 'GET' | 'POST' | 'DELETE' = 'GET') {
   const status = await call<VaultStatus>('/api/settings/vault', { method })
   tapsEnabled.value = !!status.token
   return status
+}
+/** 휴지통 비우기(완전 삭제, 다른 PC 확장에도 반영) */
+export function emptyTapsTrash() {
+  return call<{ deleted: number }>('/api/taps/trash', { method: 'DELETE' })
 }
